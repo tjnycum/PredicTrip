@@ -1,3 +1,4 @@
+// Copyright © 2020 Terry Nycum. All rights reserved except those granted in a LICENSE file.
 function FindProxyForURL(url, host)
 {
 	if (isPlainHostName(host) || isInNet(dnsResolve(host), "10.0.0.0", "255.255.255.240")) {
