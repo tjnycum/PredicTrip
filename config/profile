@@ -1,5 +1,5 @@
 #!/usr/bin/env sh
-# install as .profile and create .bash_profile that first explicitly runs this if it exists
+# install as .profile and ensure that any .bash_profile that exists explicitly runs this, because bash itself won't
 
 # ~/.profile: executed by the command interpreter for login shells.
 # This file is not read by bash(1), if ~/.bash_profile or ~/.bash_login
@@ -35,29 +35,35 @@ JAVA_HOME=/usr/lib/jvm/adoptopenjdk-8-hotspot-amd64
 export JAVA_HOME
 
 if [ -d /usr/local/hadoop ]; then
-    PATH=/usr/local/hadoop/bin:/usr/local/hadoop/sbin:"$PATH"
     HADOOP_HOME=/usr/local/hadoop
     export HADOOP_HOME
+    PATH="$HADOOP_HOME"/bin:"$HADOOP_HOME"/sbin:"$PATH"
 fi
 
 if [ -d /usr/local/spark ]; then
-    PATH=/usr/local/spark/bin:/usr/local/spark/sbin:"$PATH"
+    SPARK_HOME=/usr/local/spark
+    export SPARK_HOME
+    PATH="$SPARK_HOME"/bin:"$SPARK_HOME"/sbin:"$PATH"
+    PYSPARK_PYTHON=python3
+    export PYSPARK_PYTHON
 fi
 
 if [ -d /usr/local/hbase ]; then
-    PATH=/usr/local/hbase/bin:"$PATH"
     HBASE_HOME=/usr/local/hbase
     export HBASE_HOME
+    PATH="$HBASE_HOME"/bin:"$PATH"
 fi
 
 if [ -d /usr/local/geomesa-hbase ]; then
-    PATH=/usr/local/geomesa-hbase/bin:"$PATH"
+    GEOMESA_HBASE_HOME=/usr/local/geomesa-hbase
+    export GEOMESA_HBASE_HOME
+    PATH="$GEOMESA_HBASE_HOME"/bin:"$PATH"
 fi
 
 if [ -d /usr/local/geoserver ]; then
-    PATH=/usr/local/geoserver/bin:"$PATH"
     GEOSERVER_HOME=/usr/local/geoserver
     export GEOSERVER_HOME
+    PATH="$GEOSERVER_HOME"/bin:"$PATH"
 fi
 
 export PATH

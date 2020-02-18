@@ -10,10 +10,12 @@ Include in them all (currently) default settings of those package that we rely u
 (In case package defaults change in the future.)
 
 Notes regarding setup:
-- Hadoop version we're using expects the `workers` file to be named `slaves`, so need to either rename or symlink when
-installing it
-- Be mindful that bash itself will NOT run any `~/.profile` if a `~/.bash_profile` exists. Consider making your
-`.bash_profile` itself call your `.profile`.
+- Hadoop version we're using expects the `workers` file to be named `slaves`, so it'll need to be either renamed or 
+symlinked as such.
+- Be mindful that bash itself will _ignore_ any `~/.profile` if a `~/.bash_profile` exists. Therefore, consider making 
+your `.bash_profile` itself look for and source any `~/.profile`. Reason for putting things in .profile rather than 
+.bash_profile: abstraction. If it's script that would work (and be useful) in any POSIX-compliant shell, it should
+probably be put where any such shell would find and run it.
 - User is responsible for taking steps (e.g. creating /etc/hosts entries) to enable hosts to resolve the host names used
 in the configuration files.
 
