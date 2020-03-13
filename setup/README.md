@@ -20,14 +20,15 @@ all:
 `PREDICTRIP_CONF=~/predictrip/config;
 ln -sfT $PREDICTRIP_CONF/profile ~/.profile`
 
-geomesa, hdfsnameN, hbaseN:
+geomesa, hdfsnameN, hbaseN, sparkworkerN:
 `PREDICTRIP_CONF=~/predictrip/config;
 HADOOP_CONF=/usr/local/hadoop/etc;
 ln -sfT $PREDICTRIP_CONF/hadoop/core-site.xml $HADOOP_CONF/hadoop/core-site.xml;
 ln -sfT $PREDICTRIP_CONF/hadoop/hdfs-site.xml $HADOOP_CONF/hadoop/hdfs-site.xml;
 ln -sfT $PREDICTRIP_CONF/hadoop/hadoop-env.sh $HADOOP_CONF/hadoop/hadoop-env.sh;
 ln -sfT $PREDICTRIP_CONF/hadoop/masters $HADOOP_CONF/hadoop/masters;
-ln -sfT $PREDICTRIP_CONF/hadoop/workers $HADOOP_CONF/hadoop/slaves`
+ln -sfT $PREDICTRIP_CONF/hadoop/yarn-site.xml $HADOOP_CONF/hadoop/yarn-site.xml;
+ln -sfT $PREDICTRIP_CONF/hadoop/yarn-env.sh $HADOOP_CONF/hadoop/yarn-env.sh`
 
 geomesa, hbaseN:
 `PREDICTRIP_CONF=~/predictrip/config;
@@ -56,6 +57,20 @@ SPARK_CONF=/usr/local/spark/conf;
 ln -sfT $PREDICTRIP_CONF/spark/spark-env.sh $SPARK_CONF/spark-env.sh;
 ln -sfT $PREDICTRIP_CONF/spark/spark-defaults.conf $SPARK_CONF/spark-defaults.conf;
 ln -sfT $PREDICTRIP_CONF/spark/metrics.properties $SPARK_CONF/metrics.properties`
+
+
+hacky workaround to get hadoop to use different sets of workers for YARN and HDFS:
+sparkworkersN, geomesa:
+`PREDICTRIP_CONF=~/predictrip/config;
+HADOOP_CONF=/usr/local/hadoop/etc;
+ln -sfT $PREDICTRIP_CONF/hadoop/workers-yarn $HADOOP_CONF/hadoop/slaves`
+
+hdfsnameN, hbaseN:
+`PREDICTRIP_CONF=~/predictrip/config;
+HADOOP_CONF=/usr/local/hadoop/etc;
+ln -sfT $PREDICTRIP_CONF/hadoop/workers-dfs $HADOOP_CONF/hadoop/slaves`
+
+
 
 geoserver installation:
 make change to geomesa-hbase/bin/common-functions.sh described in

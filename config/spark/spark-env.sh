@@ -33,17 +33,17 @@
 SPARK_LOCAL_DIRS=/var/local/spark
 # - MESOS_NATIVE_JAVA_LIBRARY, to point to your libmesos.so if you use Mesos
 
-# Options read in YARN client/cluster mode
+# Options read in YARN client/cluster mode (also in standalone mode —Terry)
 # - SPARK_CONF_DIR, Alternate conf dir. (Default: ${SPARK_HOME}/conf)
 # - HADOOP_CONF_DIR, to point Spark towards Hadoop configuration files
 # - YARN_CONF_DIR, to point Spark towards YARN configuration files when you use YARN
+YARN_CONF_DIR=${HADOOP_HOME}/etc/hadoop/
 # - SPARK_EXECUTOR_CORES, Number of cores for the executors (Default: 1).
 # - SPARK_EXECUTOR_MEMORY, Memory per Executor (e.g. 1000M, 2G) (Default: 1G)
 # - SPARK_DRIVER_MEMORY, Memory for Driver (e.g. 1000M, 2G) (Default: 1G)
 
 # Options for the daemons used in the standalone deploy mode
 # - SPARK_MASTER_HOST, to bind the master to a different IP address or hostname
-SPARK_MASTER_HOST=sparkmaster
 # - SPARK_MASTER_PORT / SPARK_MASTER_WEBUI_PORT, to use non-default ports for the master
 # - SPARK_MASTER_OPTS, to set config properties only for the master (e.g. "-Dx=y")
 # - SPARK_WORKER_CORES, to set the number of cores to use on this machine

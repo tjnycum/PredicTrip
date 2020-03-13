@@ -3,43 +3,32 @@
 
 # Constants and anything else that would otherwise need to be duplicated between files
 
-from typing import Dict, Tuple, IO, Any
-
+# std lib
+from typing import Dict, Tuple, IO, Any, Mapping
 from os import path, getenv, environ
-import socket
-
-import csv
-
+from pathlib import Path
+from csv import reader
 from zlib import compress, decompress
 from base64 import b64encode, b64decode
+from contextlib import contextmanager
 
+# boto3
 from boto3.session import Session
 
+# pyspark
 from pyspark import SparkConf, SparkContext
 from pyspark.sql import SparkSession
 from pyspark.sql.types import StructField, StructType, DataType, ByteType, ShortType, IntegerType, FloatType, \
     DoubleType, StringType, BinaryType, BooleanType, TimestampType, DateType
 
-from contextlib import contextmanager
-
 
 # === Constants ===
-
-# temporary measures for remote connection for debugging
-hostname = socket.gethostname()
-if hostname == 'geomesa':
-    PREDICTRIP_REPO_ROOT = path.join(environ['HOME'], 'predictrip')
-else:
-    PREDICTRIP_REPO_ROOT = path.join(environ['HOME'], 'code', 'insight', 'predictrip')
 
 TRIPFILE_METADATA_COLS = [['Key', StringType],
                           ['Filename', StringType],
                           ['Type', StringType],
                           ['Year', ShortType],
                           ['Month', ByteType]]
-# the following must be kept consistent with the preceding
-TRIPFILE_METADATA_KEY_COL_IDX = 0
-TRIPFILE_METADATA_FILENAME_COL_IDX = 1
 
 # 6 or 7 decimal places of Decimal Degrees equates to about 100 mm at the equator. more than enough for our application
 SPARK_DATATYPE_FOR_LATLONG = FloatType
@@ -48,11 +37,15 @@ SPARK_DATATYPE_FOR_LATLONG = FloatType
 #  type, then just strip and lower-case them all before lookup and store only the remaining unique keys
 # TODO ?: to avoid unnecessary data type conversions by workers when reading CSVs, change to StringType all columns that
 #  we don't actually need to understand during cleaning/homogenization
+# TODO: limit dictionary (or whatever unified structure) to columns we want to keep/use. then when looking up, if not an
+#  initial column name isn't found in here, just leave its name unchanged and use StringType (?) for it. Then, in
+#  select_new_data_frame(), the new column names in this dictionary are the columns to be kept (if they exist).
+#  Use pandas DF? (Should be okay as long as spark workers don't need to access it.)
 # tuple structure: ( new name, subclass of pyspark.sql.types.DataType )
 # possible alternative might be in using StructType.fromJson() as exemplified here: https://stackoverflow.com/a/36035641
 ATTRIBUTES_FOR_COL: Dict[str, Tuple[str, DataType]] = {
     'vendor_name': ('Vendor_Name', StringType),
-    'vendor_id': ('Vendor_Name', StringType),  # yes, "id" is actually a string of chars
+    'vendor_id': ('Vendor_Name', StringType),  # yes, "_id" actually contains the same sorts of strings as "_name"
 
     'VendorID': ('Vendor_ID', ByteType),
 
@@ -172,12 +165,28 @@ ATTRIBUTES_FOR_COL: Dict[str, Tuple[str, DataType]] = {
     'Total_amount': ('Total_Amount', FloatType)
 }
 
-# TODO ?: somehow derive ATTRIBUTES_FOR_COL and UNDESIRED_COLUMNS from a single structure for increased maintainability
+# TODO: replace ATTRIBUTES_FOR_COL and UNDESIRED_COLUMNS with a single data structure for better maintainability —
+#  see TODO item above
 # columns to drop when present in input files (referred to by their new/desired names)
 UNDESIRED_COLUMNS = ['Vendor_Name', 'Vendor_ID', 'HVFHS_License_Num', 'Dispatching_Base', 'Trip_Distance', 'Rate_Code',
                      'Store_and_Forward', 'SR_Flag', 'Trip_Type', 'Payment_Type', 'Fare_Amount', 'Surcharge_Amount',
                      'Extra_Amount', 'MTA_Tax', 'Tip_Amount', 'Tolls_Amount', 'EHail_Fee', 'Improvement_Surcharge',
                      'Congestion_Surcharge', 'Total_Amount']
+
+# save to an intermediate file set for now, working around geomesa_pyspark issues
+# NOTE: as things currently stand, using geomesa_pyspark rather than intermediate files would also lead to actual 
+# timestamps (rather than week-wrapped ones) being used in the feature IDs
+USE_INTERMEDIATE_FILE = True
+INTERMEDIATE_USE_S3 = False
+# NOTE: the code assumes the file extension is the same as the label used here
+INTERMEDIATE_FORMAT = 'avro'
+# list of components of the path within which intermediate file sets should be saved, whether in S3 bucket or HDFS 
+INTERMEDIATE_DIRS = ['intermediate']
+# unfortunately, for avro, geomesa ingest doesn't support snappy, and spark doesn't support gzip
+# their only overlap: uncompressed, bzip2, and xz
+# also, spark uses compression within the file, while geomesa seems to require compression of the whole file (or merely
+# an unconventional suffixing of the files as if they were compressed whole)
+INTERMEDIATE_COMPRESSION = 'uncompressed'
 
 # === Functions ===
 
@@ -204,6 +213,70 @@ def stdout_redirected_to(out_stream: IO):
         stdout = orig_stdout
 
 
+def load_config() -> Mapping[str, Any]:
+    """
+    Load relevant configuration items from various files
+    :return: predictrip options
+    """
+    # TODO: return a ChainMap (https://docs.python.org/3.6/library/collections.html#chainmap-objects) that synthesizes
+    #  settings loaded from predictrip-site.*, predictrip-defaults.*, the config files of other packages, and any future
+    #  command line args
+    from configparser import ConfigParser
+    repo_root = Path(__file__).parent.parent.parent
+    parser = ConfigParser()
+    parser.read(path.join(repo_root, 'config', 'predictrip', 'predictrip-site.ini'))
+    config = {}
+
+    config['repo_root'] = repo_root
+
+    # TODO: address possibility of sections not existing
+
+    # TODO: check for AWS credential sources in order checked by aws jars and boto
+    #  (see https://boto3.amazonaws.com/v1/documentation/api/latest/guide/configuration.html#configuring-credentials),
+    #  then add whatever options to spark_conf-generation needed to distribute the first one present to workers. pass
+    #  credentials as params to boto's client method
+
+    # TODO: get defaults from predictrip-defaults.ini rather than hard-coding here
+
+    config['aws_access_key_id'] = parser['AWS'].get('AccessKeyId')
+    config['aws_secret_access_key'] = parser['AWS'].get('SecretAccessKey')
+
+    config['s3_bucket_name'] = parser['S3'].get('BucketName', 'nyc-tlc')
+    config['s3_trips_prefix'] = parser['S3'].get('TripFilePrefix', 'trip data')
+    config['csv_stub_bytes'] = int(parser['S3'].get('CsvHeaderStubSize'))
+
+    # TODO: get from config/hadoop/core-site.xml if not present in predictrip config
+    config['hadoop_namenode_host'] = parser['Hadoop'].get('NameNodeHost')
+    # TODO: find proper way to read as int from file. I think there's an alternative get method
+    config['hadoop_namenode_port'] = int(parser['Hadoop'].get('NameNodePort', 9000))
+
+    config['hbase_instance_id'] = parser['HBase'].get('InstanceID', 'default')
+
+    config['spark_geomesa_jar'] = parser['Spark'].get('GeoMesaJar')
+    # TODO: get from config/spark/spark-env.sh if not present in predictrip config
+    # TODO: find proper way to read as int from file. I think there's an alternative get method
+    config['spark_master_port'] = int(parser['Spark'].get('MasterPort', 7077))
+    config['spark_home'] = parser['Spark'].get('Home', getenv('SPARK_HOME', '/usr/local/spark'))
+
+    config['geomesa_home'] = parser['GeoMesa'].get('Home', getenv('GEOMESA_HBASE_HOME', '/usr/local/geomesa-hbase'))
+    config['geomesa_catalog'] = parser['GeoMesa'].get('Catalog', 'predictrip')
+    config['geomesa_feature'] = parser['GeoMesa'].get('Feature', 'trip')
+    config['geomesa_converter'] = parser['GeoMesa'].get('Converter', 'intermediate_avro')
+
+    return config
+
+
+def get_boto_session(config: Mapping[str, Any]) -> Session:
+    """
+    Build a boto3 session configured for predictrip
+
+    :type config: Mapping of predictrip configuration items
+    :return: boto session instance
+    """
+    return Session(aws_access_key_id=config['aws_access_key_id'],
+                   aws_secret_access_key=config['aws_secret_access_key'])
+
+
 def get_s3_client(session: Session):
     """
     Build a boto3 S3 client, providing the low-level access needed for, e.g., downloading specific byte ranges of
@@ -227,11 +300,11 @@ def get_s3_resource(session: Session):
     return session.resource('s3')
 
 
-def get_s3_bucket(s3_resource, config: Dict[str, Any]):
+def get_s3_bucket(s3_resource, config: Mapping[str, Any]):
     """
     Get a boto3 S3 Bucket instance providing access to the bucket we're interested in
     :type s3_resource: boto S3 resource object
-    :type config: dictionary representing predictrip configuration
+    :type config: mapping of predictrip configuration items
     :return: S3 Bucket instance
     """
     # TODO: figure out best type hints for return and s3_resource input
@@ -241,16 +314,15 @@ def get_s3_bucket(s3_resource, config: Dict[str, Any]):
 
 def compress_string(string: str, debugging=False) -> str:
     """
-    Compress a UTF-8 string in a way safe for passage to fork/exec, but not necessarily shells
+    Compress a UTF-8 string in a way safe for passage as an argument through fork/exec, but not necessarily shells
 
     :param string: string to be compressed
     :param debugging: whether to print output potentially helpful in debugging
     :return: string of base64-encoded bytes
     """
-    # TODO: take zlib compression level as arg
     string_bytes = string.encode('utf-8')
     if debugging:
-        print('inputted string is {} bytes in size'.format(len(string_bytes)))
+        print('initial string is {} bytes in size'.format(len(string_bytes)))
     string_compressed = compress(string_bytes)
     if debugging:
         print('string is {} bytes in size after compression with zlib (default level, 6)'
@@ -295,7 +367,7 @@ def build_structtype_for_file(file: IO, verify_eol=False) -> StructType:
     # when inferring. (i.e. that would never be the "right" data type for us.)
 
     # TODO: get this working using an Iterator. i.e. without reading whole file to pass to csv.reader
-    csv_rows = csv.reader(file.read().decode().split("\r\n", 2))
+    csv_rows = reader(file.read().decode().split("\r\n", 2))
     try:
         column_names = csv_rows.__next__()
     except Exception:
@@ -326,46 +398,9 @@ def build_structfield_for_column(column_name: str) -> StructField:
         attribs = ATTRIBUTES_FOR_COL[column_name.strip()]
     except KeyError:
         raise
-    # note: the () after attribs(2) is needed to actually instantiate the class that is attribs(2)
+    # note: the () after attribs[2] is needed to actually instantiate the class that is attribs[2]
     sf = StructField(attribs[0], attribs[1]())
     return sf
-
-
-def load_config() -> Dict[str, Any]:
-    """
-    Load relevant configuration items from various files
-    :return: predictrip options
-    """
-    # TODO: use ChainMap (https://docs.python.org/3.6/library/collections.html#chainmap-objects)
-    from configparser import ConfigParser
-    parser = ConfigParser()
-    parser.read(path.join(PREDICTRIP_REPO_ROOT, 'config', 'predictrip', 'predictrip-site.ini'))
-    config = {}
-
-    # TODO: address possibility of sections not existing
-    # TODO: store defaults in a predictrip-defaults.ini file rather than here
-
-    # TODO: check for AWS credential sources in order checked by aws jars and boto
-    #  (see https://boto3.amazonaws.com/v1/documentation/api/latest/guide/configuration.html#configuring-credentials),
-    #  then add whatever options to spark_conf-generation needed to distribute the first one present to workers. pass
-    #  credentials as params to boto's client method
-    # TODO: otherwise, get either AWS key from ~/.aws/credentials (also using configparser) if not specified in
-    #  predictrip-site.ini
-    config['aws_access_key'] = parser['AWS'].get('AccessKeyId')
-    config['aws_secret_access_key'] = parser['AWS'].get('SecretAccessKey')
-
-    config['s3_bucket_name'] = parser['S3'].get('BucketName', 'nyc-tlc')
-    config['s3_trips_prefix'] = parser['S3'].get('TripFilePrefix', 'trip data')
-    config['csv_stub_bytes'] = int(parser['S3'].get('CsvHeaderStubSize'))
-
-    config['spark_geomesa_jar'] = parser['Spark'].get('GeoMesaJar')
-    # TODO: look for in config/spark/spark-env.sh instead of predictrip config
-    config['spark_master_port'] = parser['Spark'].get('MasterPort', 7077)
-    config['spark_home'] = parser['Spark'].get('Home', getenv('SPARK_HOME', '/usr/local/spark'))
-    # val = parser['Spark'].get('ExecutorCores', None)
-    # if val is not None:
-    #     config['spark.executor.cores'] = val
-    return config
 
 
 if __name__ == '__main__':

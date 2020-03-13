@@ -4,23 +4,21 @@
 
 # std lib
 from os import path
-from typing import List, Dict, Union, Tuple
-from subprocess import run, PIPE
-
-# boto3
-import boto3
-import botocore
-from boto3.resources.base import ServiceResource
-from botocore.client import BaseClient
+from typing import List, Mapping, Union, Tuple, Any
+from subprocess import run
 
 # pandas
 from pandas import DataFrame
 
 # predictrip
-from common import load_config, get_s3_client, get_s3_resource, get_s3_bucket, \
+from common import load_config, get_boto_session, get_s3_client, get_s3_resource, get_s3_bucket, \
     build_structfield_for_column, build_structtype_for_file, compress_string, \
-    PREDICTRIP_REPO_ROOT, SPARK_DATATYPE_FOR_LATLONG, ATTRIBUTES_FOR_COL, UNDESIRED_COLUMNS, \
-    TRIPFILE_METADATA_COLS, TRIPFILE_METADATA_KEY_COL_IDX, TRIPFILE_METADATA_FILENAME_COL_IDX
+    SPARK_DATATYPE_FOR_LATLONG, ATTRIBUTES_FOR_COL, UNDESIRED_COLUMNS, TRIPFILE_METADATA_COLS, \
+    USE_INTERMEDIATE_FILE, INTERMEDIATE_FORMAT, INTERMEDIATE_DIRS, INTERMEDIATE_USE_S3, INTERMEDIATE_COMPRESSION
+
+
+TESTING = True
+TESTING_CSV_LIMIT = None
 
 # TODO: make into Ingester class
 
@@ -41,13 +39,12 @@ def parse_key(key: str) -> List[Union[str, int]]:
     [year, rest] = rest.split('-', 1)
     # could just grab first two chars, but this way we don't assume leading zero on month will continue
     [month, junk] = rest.split('.', 1)
-    # TODO: the ordering of the following must stay consistent with TRIPFILE_METADATA_COLS. do that programmatically
+    # TODO: programmatically ensure the ordering of the following stays consistent with TRIPFILE_METADATA_COLS
     return [key, fn, kind, int(year), int(month)]
 
 
-def clean_and_join_time_period_data(time_period_metadata: DataFrame) -> None:
-    # TODO: add docstring
-    # submit first spark job (Python) to spark cluster
+def clean_and_standardize_time_period_data(time_period_metadata: DataFrame, config: Mapping[str, str]) -> None:
+    # FIXME: add docstring
 
     # NOTE: for compatibility with pyspark method used on the other end, it MUST be that orient='records' and lines=True
     table_json = time_period_metadata.to_json(orient='records', lines=True)
@@ -57,38 +54,64 @@ def clean_and_join_time_period_data(time_period_metadata: DataFrame) -> None:
     # construct call to spark-submit
     spark_submit = path.join(config['spark_home'], 'bin', 'spark-submit')
     # don't need to specify to spark-submit anything set in spark-defaults.conf or SparkConf
-    script = path.join(PREDICTRIP_REPO_ROOT, 'code', 'python', 'clean_and_join.py')
+    script = path.join(config['repo_root'], 'code', 'python', 'clean_and_join.py')
     cmd = [spark_submit, script, table_compressed]
-    # Note: don't expand cmd list in run call. including PREDICTRIP_REPO_ROOT part of path in script is redundant of
-    # using cwd arg, but *shrug* this way more resilient to future code changes
-    comp_proc = run(cmd, check=True, cwd=PREDICTRIP_REPO_ROOT)
-    print(comp_proc.stdout)
+    # Note: including config['repo_root'] part of path in script is redundant of using cwd arg, but *shrug* this way
+    # a little more resilient to future code changes
+    # TODO: log (DEBUG) the command about to be run
+    run(cmd, check=True, cwd=config['repo_root'])
 
 
-def cast_and_insert_time_period_data(time_period_metadata: DataFrame) -> None:
-    # TODO: add docstring
-    # submit second spark job (Java) to spark cluster
+def cast_and_insert_time_period_data(config: Mapping[str, str]) -> None:
+    # FIXME: add docstring
+    # only needed if not using geomesa_pyspark to insert to DB directly from spark
 
-    # the Java code run by that job should:
-    # use SQL statements to create point columns and cast timestamp columns using GeoMesa Spark JTS datatype-casting UDFs as appropriate
-    # ref https://www.geomesa.org/documentation/user/spark/sparksql_functions.html#st-point
-    # SELECT st_point(Pickup_Longitude, Pickup_Latitude) AS Pickup_Point
+    # construct call to geomesa-hbase to ingest features from intermediate file
+    geomesa = path.join(config['geomesa_home'], 'bin', 'geomesa-hbase')
+    if INTERMEDIATE_COMPRESSION != 'uncompressed':
+        raise NotImplementedError
+    if INTERMEDIATE_USE_S3:
+        url_start = 's3a://' + config['s3_bucket_name']
+    else:
+        url_start = 'hdfs://' + config['hadoop_namenode_host'] + ':' + str(config['hadoop_namenode_port'])
+    cmd = [geomesa, 'ingest', '-c', config['geomesa_catalog'], '-C', config['geomesa_converter'],
+           '-f', config['geomesa_feature'], '--run-mode', 'distributed',
+           '/'.join([url_start, *INTERMEDIATE_DIRS, '*.' + INTERMEDIATE_FORMAT])]
+    # TODO: log (DEBUG) the command about to be run
+    run(cmd, check=True)
 
-    # call DataFrame's .save() method provided by GeoMesa
 
-    pass
+def simulate_time_period(time_period_table: DataFrame, config: Mapping[str, Any]) -> None:
+    # FIXME: docstring
+
+    # assuming any filtration into time periods will have preserved their internal sort
+    if len(time_period_table) > 1:
+        print('Time period: {first.Month}/{first.Year} – {last.Month}/{last.Year}'
+              .format(first=time_period_table.iloc[0], last=time_period_table.iloc[-1]))
+    else:
+        print('Time period: {only.Month}/{only.Year}'.format(only=time_period_table.iloc[0]))
+
+    if USE_INTERMEDIATE_FILE:
+        print('Cleaning and standardizing time period trips')
+    else:
+        print('Ingesting time period trips')
+    clean_and_standardize_time_period_data(time_period_table, config)
+    if USE_INTERMEDIATE_FILE:
+        print('Casting and inserting time period trips')
+        cast_and_insert_time_period_data(config)
+
+    # TODO (future): trigger compaction cycle
+
+    input('Press Enter to continue with next time period')
 
 
-if __name__ == '__main__':
+def main():
 
     config = load_config()
 
     # TODO: break down into more functions?
 
-    # TODO: account for info in
-    #  https://boto3.amazonaws.com/v1/documentation/api/latest/guide/resources.html#multithreading-multiprocessing
-    boto_session = boto3.session.Session()
-    s3_client = get_s3_client(boto_session)
+    boto_session = get_boto_session(config)
     # TODO: if s3_resources continue to be used only to get bucket, merge get_s3_resource into get_s3_bucket. but wait
     #  until we've restructured as class.
     s3_resource = get_s3_resource(boto_session)
@@ -107,9 +130,10 @@ if __name__ == '__main__':
     # efficient than iteratively appending to DataFrame (see "Notes" on
     # https://pandas.pydata.org/pandas-docs/stable/reference/api/pandas.DataFrame.append.html#pandas-dataframe-append)
     # parse filename into year, month, and trip type
-    # would be nice to declare datatype of each column, but constructor only accepts a singleton dtype argument
+    # would be nice to declare data type of each column, but constructor only accepts a singleton dtype argument
     trip_files = [parse_key(obj.key) for obj in objs]
     trip_files = DataFrame(trip_files, columns=[col[0] for col in TRIPFILE_METADATA_COLS])
+    # TODO: convert column data types for increased efficiency of manipulations to follow ?
 
     # exclude undesired tripfiles now, using labeled columns, rather than filenames, which are less convenient
     # first pass: limit to those with usable lat and long columns: green and yellow, through the first half of 2016
@@ -128,23 +152,27 @@ if __name__ == '__main__':
     # 1. the for-loop below
     # 2. (ideally) Apache Airflow, as originally envisioned
 
-    # doing simplest implementation for now: one chunk (i.e. no periodic compaction cycle)
-    # otherwise, at this point we would separate trip_files entries into separate pandas DataFrames for each time period
-    # and store them chronologically in time_period_tables list
-    time_period_tables = [trip_files]
+    if TESTING and TESTING_CSV_LIMIT is not None:
+        time_period_tables = [trip_files.head(min(len(trip_files), TESTING_CSV_LIMIT))]
 
-    for time_period_table in time_period_tables:
-        # assuming any filtration into time periods will have preserved their internal sort
-        print('Time period: {first.Month}/{first.Year} – {last.Month}/{last.Year}'
-              .format(first=time_period_table.iloc[0], last=time_period_table.iloc[-1]))
+    # separate trip_file entries into separate pandas DataFrames for each time period (year, for now) and store them
+    # chronologically in time_period_tables list
+    # simulate_time_period() assumes the filtration into time periods will retain the sort done above, which fortunately
+    # groupby guarantees — see
+    # https://pandas.pydata.org/pandas-docs/stable/reference/api/pandas.DataFrame.groupby.html#pandas-dataframe-groupby
+    year_groups = trip_files.groupby(['Year'])
+    time_period_tables = [year_groups.get_group(year) for year in year_groups.groups]
 
-        print('Cleaning and joining time period data')
-        clean_and_join_time_period_data(time_period_table)
+    # code left from previous hacks in case useful for future ones:
+    # # time_period_tables = [trip_files]
+    # # stopgap measure to get data into database with geomesa's S3 ingestion not working and without doubling HDFS
+    # # taking them 3 at a time to at least allow all three spark workers to be used
+    # step = 12
+    # # obviously not good Pandas usage, but I need to iterate over the rows as DataFrames
+    # time_period_tables = [trip_files[i:i+step] for i in range(0, len(trip_files)-1, step)]
 
-        # TODO: need to change first path segment of key to 'intermediate' and strip '.csv' extensions from filenames
-        #  and keys so that Spark's read to DataFrame finds the parquet files
+    [simulate_time_period(time_period_table, config) for time_period_table in time_period_tables]
 
-        # print('Casting and inserting time period data')
-        # cast_and_insert_time_period_data(time_period_table)
 
-        # TODO (future): trigger compaction cycle
+if __name__ == '__main__':
+    main()

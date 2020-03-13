@@ -1,15 +1,6 @@
 #!/usr/bin/env sh
-# install as .profile and ensure that any .bash_profile that exists explicitly runs this, because bash itself won't
-
-# ~/.profile: executed by the command interpreter for login shells.
-# This file is not read by bash(1), if ~/.bash_profile or ~/.bash_login
-# exists.
-# see /usr/share/doc/bash/examples/startup-files for examples.
-# the files are located in the bash-doc package.
-
-# the default umask is set in /etc/profile; for setting the umask
-# for ssh logins, install and configure the libpam-umask package.
-#umask 022
+# install as .profile and ensure that any .bash_profile that exists explicitly runs this, because bash itself won't if
+# .bash_profile exists
 
 # if running bash
 if [ -n "$BASH_VERSION" ]; then
@@ -34,10 +25,15 @@ fi
 JAVA_HOME=/usr/lib/jvm/adoptopenjdk-8-hotspot-amd64
 export JAVA_HOME
 
+PREDICTRIP_HOME="$HOME"/predictrip
+export PREDICTRIP_HOME
+
 if [ -d /usr/local/hadoop ]; then
     HADOOP_HOME=/usr/local/hadoop
     export HADOOP_HOME
     PATH="$HADOOP_HOME"/bin:"$HADOOP_HOME"/sbin:"$PATH"
+    YARN_CONF_DIR=$HADOOP_HOME/etc/hadoop/
+    export YARN_CONF_DIR
 fi
 
 if [ -d /usr/local/spark ]; then

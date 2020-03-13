@@ -8,51 +8,59 @@
 # TODO: use logging module! https://docs.python.org/3.6/howto/logging.html
 
 # std lib
-from typing import Tuple, List, Dict, Any, Iterable, IO
-from argparse import ArgumentParser, ArgumentDefaultsHelpFormatter, ArgumentTypeError
+from typing import Tuple, List, Dict, Any, Iterable, IO, Mapping
+from os import path, environ
+from io import BytesIO, StringIO
+from argparse import ArgumentParser, Namespace, ArgumentDefaultsHelpFormatter, ArgumentTypeError
 
 # pyspark
-from pyspark import RDD, SparkContext, SparkConf
-from pyspark.sql import SparkSession, DataFrame, Row
+from pyspark import SparkContext, SparkConf
+from pyspark.sql import SparkSession, DataFrame, Row, Column
 from pyspark.sql.types import StructType, StructField
 
+# geomesa_pyspark
+import geomesa_pyspark
+
 # predictrip
-from common import load_config, get_s3_client, get_s3_resource, get_s3_bucket, stdout_redirected_to \
+from common import load_config, get_boto_session, get_s3_client, stdout_redirected_to, \
     build_structfield_for_column, build_structtype_for_file, decompress_string, \
-    PREDICTRIP_REPO_ROOT, SPARK_DATATYPE_FOR_LATLONG, ATTRIBUTES_FOR_COL, UNDESIRED_COLUMNS, \
-    TRIPFILE_METADATA_COLS, TRIPFILE_METADATA_KEY_COL_IDX, TRIPFILE_METADATA_FILENAME_COL_IDX
-
-from os import path, environ
-
+    ATTRIBUTES_FOR_COL, UNDESIRED_COLUMNS, \
+    USE_INTERMEDIATE_FILE, INTERMEDIATE_FORMAT, INTERMEDIATE_DIRS, INTERMEDIATE_USE_S3, INTERMEDIATE_COMPRESSION
 
 TESTING = True
 TESTING_RECORD_LIMIT_PER_CSV = None
+# NOTE: any such file already existing will have its contents replaced
 TESTING_EXPLAIN_FILE = path.join(environ['HOME'], 'spark_explanation_most_recent.txt')
-# any such file already existing will be appended
 
 
-def build_spark_config(predictrip_config: Dict[str, Any]) -> SparkConf:
+def get_spark_config(predictrip_config: Mapping[str, Any]) -> SparkConf:
     """
     Create an object representing the Spark configuration we want
 
-    :type predictrip_config: dictionary in which we internally store configuration data loaded from preference files
+    :type predictrip_config: mapping in which we internally store configuration data loaded from preference files
     :return: pyspark.SparkConf instance
     """
-    # TODO: decide whether to keep specifying jars and such in here or in spark-defaults.conf
-    from os import path
+    # NOTE: contrary to https://www.geomesa.org/documentation/user/spark/pyspark.html#using-geomesa-pyspark, use of
+    # geomesa_pyspark.configure() no longer necessary since Spark 2.1, as long as you tell spark to include the
+    # geomesa_pyspark python module some other way (e.g. spark.files)
 
     sc = SparkConf()
     sc = sc.setAppName('PredicTrip ' + path.basename(__file__))
-    # load GeoMesa stuff — spark-defaults.sh should be taking care of this
-    # sc = sc.set('spark.jars', predictrip_config['spark_geomesa_jar'])
-    # add support for s3 URIs
-    # TODO: try with amazon's aws library alone (no hadoop-aws)
-    # TODO: try aws sdk ver 2, which is supposed to have better performance
-    # TODO: try with hadoop's aws alone
-    sc = sc.set('spark.jars.packages', 'com.amazonaws:aws-java-sdk:1.7.4,org.apache.hadoop:hadoop-aws:2.7.7')
+    # FIXME: the following doesn't seem to be effective
+    sc = sc.setAll([('fs.s3a.awsAccessKeyId', predictrip_config['aws_access_key_id']),
+                    ('fs.s3a.awsSecretAccessKey', predictrip_config['aws_secret_access_key'])])
+    # TODO: get any other spark options from predictrip_config and add them to sc here — needed if we were to stop
+    #  specifying them in spark-defaults.conf (or having them preinstalled on workers with pip)
+    # such options would include: spark.jars, spark.jars.packages, spark.files
     if 'spark.executor.cores' in predictrip_config:
         sc = sc.set('spark.executor.cores', predictrip_config['spark.executor.cores'])
     return sc
+
+
+def get_geomesa_datastore_connection_config(predictrip_config: Mapping[str, Any]) -> Dict[str, str]:
+    # FIXME: docstring
+    return {'hbase.instance.id': predictrip_config['hbase_instance_id'],
+            'hbase.catalog': predictrip_config['geomesa_catalog']}
 
 
 def unpack_table(string: str, debugging=False) -> List[str]:
@@ -84,16 +92,15 @@ def unpack_table(string: str, debugging=False) -> List[str]:
     return string_list
 
 
-def get_csv_stub(key: str, s3_client, config: Dict[str, Any]) -> IO:
+def get_csv_stub(key: str, s3_client, config: Mapping[str, Any]) -> IO:
     """
     Get a file-like object containing the first config['csv_stub_bytes'] bytes of an S3 object.
 
     :param key: S3 key of the file object
     :param s3_client: Boto3 S3 Client instance with which to download stub
-    :param config: dictionary of predictrip configuration items
+    :param config: mapping of predictrip configuration items
     :return: File-like object, open and ready to read
     """
-    from io import BytesIO
 
     file = BytesIO()
 
@@ -115,25 +122,27 @@ def get_csv_stub(key: str, s3_client, config: Dict[str, Any]) -> IO:
     return file
 
 
-def get_struct_type_for_s3_key(key: str, s3_client, config: Dict[str, Any]) -> StructType:
+def get_struct_type_for_s3_key(key: str, s3_client, config: Mapping[str, Any]) -> StructType:
     """
     Build a PySpark StructType describing the file having a given S3 object key
 
     :param key: key of the S3 object that is the file
     :param s3_client: Boto3 S3 Client instance with which to access file
-    :param config: predictrip configuration dictionary
+    :param config: mapping of predictrip configuration items
     :return: StructType describing the schema of the file having the given key
     """
-    # derive schema from column names in CSV file stub, checking for at least one EOL to confirm we downloaded a large
+    # derive schema from column names in CSV file stub, checking for at least one EOL to confirm we downloaded a large-
     # enough stub
     # TODO: if this ends up being needed to be called multiple times per file, memoize it. (create class holding a
-    #  dict(key: structtype) and call a get method of it that only calls this func if output of previous call for key
+    #  dict(key: struct_type) and call a get method of it that only calls this func if output of previous call for key
     #  isn't already in dict.)
     stub = get_csv_stub(key, s3_client, config)
     return build_structtype_for_file(stub, verify_eol=True)
 
 
-def get_metadata_data_frame(metadata_table: str) -> DataFrame:
+def get_metadata_data_frame(metadata_table: str, spark: SparkSession, spark_cont: SparkContext) -> DataFrame:
+    # FIXME: delete if never ends up being used
+    # FIXME: docstring
     # create spark data frame from metadata_table, inferring schema from JSON
     # NOTE: spark.read.json expects a list of single-record JSON strings (so-called linear JSON) (see
     # https://stackoverflow.com/a/49676143 and
@@ -154,36 +163,15 @@ def get_metadata_data_frame(metadata_table: str) -> DataFrame:
     return spark.read.json(spark_cont.parallelize(metadata_table))
 
 
-def load_csv_contents(metadata_row: Row, config: Dict[str, Any]) -> List[Tuple[Tuple, str]]:
-    # alternative to load_and_standardize_csv_contents* that returns heterogeneously structured CSV rows in tuples with
-    # whatever metadata will be needed by a subsequently mapped function to then standardize them.
-
-    pass
-
-
-def load_and_standardize_csv_contents_pandas(metadata_row: Row, config: Dict[str, Any]) -> List:
-    # function to be applied to each row of trip file metadata "table" RDD using flatMap function, returning an object
-    # that iterates over the rows of the file standardized with the help of Pandas
-    # Problem is Pandas can't read from S3 directly. So we'd have to download to a temporary file on disk using Boto3,
-    # and only once that completed would processing of it begin. I believe (hope) that would not be true of Spark.
-
-    pass
-
-
-def get_data_frame_for_csv(key: str, s3_client, config: Dict[str, Any]) -> DataFrame:
-    # TODO: docstring
+def get_data_frame_for_csv(key: str, s3_client, spark: SparkSession, config: Mapping[str, Any]) -> DataFrame:
+    # FIXME: docstring
 
     # create DataFrame, specifying schema instead of inferring, for performance reasons
     source_filename = 's3a://' + config['s3_bucket_name'] + '/' + key
     schema = get_struct_type_for_s3_key(key, s3_client, config)
     # TODO: use a parser to determine timestampFormat from appropriate column of downloaded stub, to
     #  accommodate future formatting changes
-    # TODO: performance impact of ignore{Leading,Trailing}WhiteSpace?
-    # TODO: figure out whether some needed option to read.csv not being used is what's resulting in Lat/Long fields
-    #  losing precision. we'd probably be getting rid of that excessive precision anyway, but the behavior should be
-    #  understood
-    df = spark.read.csv(source_filename, multiLine=True, header=True, nullValue=None,
-                        # ignoreLeadingWhiteSpace=True, ignoreTrailingWhiteSpace=True,
+    df = spark.read.csv(source_filename, multiLine=True, header=True, nullValue='',
                         timestampFormat='yyyy-MM-dd HH:mm:ss',
                         schema=schema, inferSchema=False, enforceSchema=True)
     if TESTING and TESTING_RECORD_LIMIT_PER_CSV is not None:
@@ -192,19 +180,16 @@ def get_data_frame_for_csv(key: str, s3_client, config: Dict[str, Any]) -> DataF
 
 
 def select_new_data_frame(df: DataFrame) -> DataFrame:
-    # TODO: docstring
+    # FIXME: docstring
 
     # drop columns we're not currently interested in
     df = df.drop(*UNDESIRED_COLUMNS)
 
     # Alternative approach that would be better for maintainability (in the face of potential future changes to the
-    # TLC's reporting). But it might be less convenient for us. TBD when implementing the joining with TZ data
-    # DESIRED_COLUMNS = ['Pickup_DateTime', 'Dropoff_DateTime', 'Passenger_Count',
+    # TLC's reporting), but might be less convenient for us. TBD when implementing the joining with TZ data
+    # DESIRED_COLUMNS = ['Pickup_DateTime', 'Pickup_Day', 'Pickup_Hour', 'Dropoff_DateTime', 'Passenger_Count',
     #                    'Pickup_Longitude', 'Pickup_Latitude', 'Dropoff_Longitude', 'Dropoff_Latitude']
     # df = df.selectExpr(DESIRED_COLUMNS)
-
-    # Hopefully Spark is "smart" enough that the choice wouldn't affect the query plan.
-    # TODO: test that
 
     # TODO: handle joining with broadcasted taxi zone DataFrame and alternative default TZ_ID cols, as necessary
     # for each of Pickup and Dropoff:
@@ -216,91 +201,182 @@ def select_new_data_frame(df: DataFrame) -> DataFrame:
     return df
 
 
-def uniformize_data_frames(data_frames: List[DataFrame], config: Dict[str, Any]) -> List[DataFrame]:
+def uniformize_data_frames(data_frames: List[DataFrame]) -> List[DataFrame]:
     # TODO: docstring
-    # Use a SQL SELECT statement (and possibly joins) to extract a uniform set of columns from each of the input data
-    # frames of varying structure.
+    # Use SQL statements to extract a uniform set of columns from each of the input data frames, which can and do vary
+    # in structure.
     # By making this function take a list (rather than an individual DataFrame and calling it in a list generation),
     # this function has an opportunity to potentially examine them all to dynamically determine what the uniform
-    # structure should be. However I don't think we need this ability right now.
+    # structure should be. We don't need this ability right now, though.
 
     data_frames = [select_new_data_frame(df) for df in data_frames]
     return data_frames
 
 
-def process_files_concatenated(metadata: str, config: Dict[str, Any]) -> None:
-    # less naive, but still using SQL and DataFrames, dependent upon good work by Spark's optimizer
-    # TODO: docstring
+def process_files_concatenated(metadata: str, spark: SparkSession, config: Mapping[str, Any]) -> None:
+    # using SQL and DataFrames, trusting Catalyst's optimizations to not get bogged down by number of input DataFrames
+    # FIXME: docstring
 
     from pandas import read_json
-    from io import StringIO
     from functools import reduce
-    from copy import copy
 
     # read metadata into pandas data frame via in-memory file-like object
     metadata = read_json(StringIO('\n'.join(metadata)), orient='records', lines=True)
 
-    from boto3 import session
-    boto_session = session.Session()
+    boto_session = get_boto_session(config)
     s3_client = get_s3_client(boto_session)
 
-    data_frames = [get_data_frame_for_csv(key, s3_client, config)
+    data_frames = [get_data_frame_for_csv(key, s3_client, spark, config)
                    for key, filename in zip(metadata['Key'], metadata['Filename'])]
 
     # standardize the structures of the data frames, then get their union
     # TODO: find out performance penalty of using unionByName. alternative would be to use a list of the columns that we
     #  DO want in a select statement in uniformize_data_frames to get consistent column ordering, instead of the current
     #  dropping of what we don't want (leaving resulting ordering unknown)
-    data_frames = uniformize_data_frames(data_frames, config)
+    data_frames = uniformize_data_frames(data_frames)
     df = reduce(DataFrame.unionByName, data_frames)
 
-    # filter rows missing values in critical columns
+    # drop rows with missing or invalid values in critical columns
     # TODO: determine whether clever use of options available during data frame creation from input CSVs could be used
     #  to achieve some of this filtering.
-    #  see https://spark.apache.org/docs/2.4.4/api/python/pyspark.sql.html#pyspark.sql.DataFrameReader
-    # filter expressions can be either python operations on column objects or SQL expressions. using SQL expressions in
-    # case it's otherwise not smart enough to figure out that all the rows can be processed completely independently,
-    # and for code portability
+    #  see https://spark.apache.org/docs/2.4.4/api/python/pyspark.sql.html#pyspark.sql.DataFrameReader.csv
+    # filter expressions can be either python expressions on column objects or SQL expressions. using SQL expressions
+    # for greater code portability, and in case Catalyst wouldn't otherwise figure out that all the rows can be
+    # processed completely independently
     # ref https://spark.apache.org/docs/2.4.4/api/sql/index.html
-    df = df.filter('! (isnull(Pickup_DateTime) or Pickup_Latitude == 0 or Pickup_Longitude == 0 ' +
-                   'or Dropoff_Latitude == 0 or Dropoff_Longitude == 0)')
+    # I tried dropna() instead of filter() to see if Spark would correctly infer that resulting columns were no longer
+    # nullable, but it didn't
+    df = df.filter('! ('
+                   'isnull(Pickup_DateTime) or year(Pickup_DateTime) < 2009 or Pickup_DateTime > now() '
+                   'or isnull(Pickup_Latitude) or Pickup_Latitude == 0 or abs(Pickup_Latitude) > 90 '
+                   'or isnull(Dropoff_Latitude) or Dropoff_Latitude == 0 or abs(Dropoff_Latitude) > 90 '
+                   'or isnull(Pickup_Longitude) or Pickup_Longitude == 0 or abs(Pickup_Longitude) > 180 '
+                   'or isnull(Dropoff_Longitude) or Dropoff_Longitude == 0 or abs(Dropoff_Longitude) > 180 '
+                   ')')
 
-    # TODO: examine spark execution plans. I suspect it might be doing the column creation before the filtering, which
-    #  means pointlessly calculating new column values for rows that will only be thrown away. also using those
-    #  execution plans, ensure the order of the changes made below doesn't matter. if it does, order them accordingly
+    if not USE_INTERMEDIATE_FILE:
+        # register GeoMesa extensions (e.g. the SQL functions we'll need) in SparkSession
+        geomesa_pyspark.init_sql(spark)
 
-    # add new columns containing pickup day of the week and hour of the day
-    # sql func: dayofweek(timestamp)    https://spark.apache.org/docs/2.4.4/api/sql/index.html#dayofweek
-    # sql func: hour(datetime)          https://spark.apache.org/docs/2.4.4/api/sql/index.html#hour
-    new_column_exprs = copy(df.columns)
-    new_column_exprs.insert(1, 'dayofweek(Pickup_DateTime) AS Pickup_Day')
-    new_column_exprs.insert(2, 'hour(Pickup_DateTime) AS Pickup_Hour')
+    # GeoMesa would use the values of a column named __fid__ as the "feature ID" (i.e. primary key of the records).
+    # GeoMesa only supports vertical partitioning ("splitting" as they call it) of tables on the basis of feature ID.
+    # When feature ID is unspecified, GM defaults to using a generator that incorporates the z3 index (in a way that
+    # preserves proximity relationships). See
+    # https://www.geomesa.org/documentation/user/datastores/runtime_config.html#geomesa-feature-id-generator
+    # An alternative would be to follow GM's general advice of using an md5 hash of the "whole record", but as GM
+    # apparently doesn't actually enforce uniqueness of the feature ID, doing so wouldn't actually help us prevent
+    # duplication anyway.
+
+    # TODO: once code settled, update comment below to be consistent with it
+    # add new columns containing pickup day of the week and hour and second of the day, and replace the latitude and
+    # longitude float pairs with GeoMesa points
+    # Spark builtins:
+    #     ifnull(a, b)                  https://spark.apache.org/docs/2.4.4/api/sql/index.html#ifnull
+    #     hour(timestamp)               https://spark.apache.org/docs/2.4.4/api/sql/index.html#hour
+    #     weekday(timestamp)            https://spark.apache.org/docs/2.4.4/api/sql/index.html#weekday
+    #       note: weekday()   maps {Mon–Sun} -> {0–6}
+    #             dayofweek() maps {Sun–Sat} -> {1–7}
+    #         I use weekday here b/c it follows:
+    #             1. international standard (ISO 8601) re semantics of first day of week, and
+    #             2. 0-based indexing — no code currently relies on this, but as it's more common among
+    #                                   programming languages, including this one, it seems the safer choice
+    #     date_trunc(fmt, timestamp)    https://spark.apache.org/docs/2.4.4/api/sql/index.html#date_trunc
+    #     unix_timestamp(timestamp)     https://spark.apache.org/docs/2.4.4/api/sql/index.html#unix_timestamp
+    # GeoMesa-JTS:
+    #     st_point(x, y)        https://www.geomesa.org/documentation/user/spark/sparksql_functions.html#st-point
+
+    # accommodate the unintentional requirement of geomesa_pyspark's/Spark's DF.save() that the columns be in
+    # lexicographical order
+
+    # NOTE: The timezone of the timestamps in the input CSVs isn't specified, but is presumably NYC local
+    # time. We could store them as UTC as one might in a system serving the whole globe, but I'm choosing not to for
+    # a couple reasons: 1) it would complicate (or risk confusing) the querying, and 2) it would de-adjust for DST,
+    # which we probably don't want to do because DST-adjusted times are more relevant to people's travel patterns. In
+    # fact, you might store in local time even in a system serving the whole globe for that reason, at least if it
+    # weren't for trips spanning time zone and/or DST boundaries (spatial or temporal).
+    if USE_INTERMEDIATE_FILE:
+        # work around geomesa_pyspark shortcomings by writing to file for DB to ingest
+        new_column_exprs = [
+            'Dropoff_Longitude',
+            'Dropoff_Latitude',
+            'ifnull(Passenger_Count, 1) AS Passenger_Count',
+            'Pickup_Longitude',
+            'Pickup_Latitude',
+            'unix_timestamp(Pickup_DateTime) AS Pickup_SecondOfUnixEpoch',
+            "int(unix_timestamp(Pickup_DateTime) - unix_timestamp(date_trunc('week', Pickup_DateTime)))"
+            ' AS Pickup_SecondOfWeek'
+        ]
+    else:
+        new_column_exprs = [
+            "int(unix_timestamp(Pickup_DateTime) - unix_timestamp(date_trunc('week', Pickup_DateTime)))"
+            ' AS Pickup_SecondOfWeek',
+            'st_point(Dropoff_Longitude, Dropoff_Latitude) AS Dropoff_Location',
+            'ifnull(Passenger_Count, 1) AS Passenger_Count',
+            'Pickup_DateTime AS Pickup_DateTime',
+            'st_point(Pickup_Longitude, Pickup_Latitude) AS Pickup_Location'
+        ]
+        # NOTE: to provide for summarization, add a Trip_Count Integer attribute and cast Passenger_Count to Float (to
+        # hold the average passenger count for the summarized trips)
+        #    '1 AS Trip_Count'
+        #    'ifnull(Passenger_Count, 1) AS Passenger_Count'
+
     df = df.selectExpr(new_column_exprs)
 
-    if TESTING:
+    # TODO: log (DEBUG) this instead
+    print(df.schema)
+
+    if TESTING and TESTING_EXPLAIN_FILE is not None:
         # Save query plan on driver for analysis
-        with open(TESTING_EXPLAIN_FILE, mode='at') as file:
+        with open(TESTING_EXPLAIN_FILE, mode='wt') as file:
             # have to redirect stdout, as df.explain does not return the string. it prints it to stdout and returns None
             with stdout_redirected_to(file):
+                # FIXME: this isn't preventing output to console. instead sending to both
                 df.explain(extended=True)
             print('Spark query explanation saved to ' + TESTING_EXPLAIN_FILE)
 
-    # save to one big merged file set in S3 for the hand-off to Java, for the time being
-    df.write.parquet(path='s3a://' + config['s3_bucket_name'] + '/intermediate/time_period',
-                     mode='overwrite', compression='none')
-    # df.write.csv(path='s3a://' + config['s3_bucket_name'] + '/intermediate/time_period',
-    #              mode='overwrite', header=True, nullValue='null', timestampFormat='yyyy-MM-dd HH:mm:ss')
-    # TODO: confirm creation of _SUCCESS file in S3. if not there, don't reattempt, though, just give error, because the
-    #  whole pipeline would effectively have to be rerun from the beginning anyway. so let a human investigate and rerun
-    # have to use boto? or can hadoop's built-in support be used?
+    if USE_INTERMEDIATE_FILE:
+        # save to an intermediate file set to be ingested by geomesa_hbase, bypassing geomesa_pyspark issues
+        df_writer = df.write.mode('overwrite').option('compression', INTERMEDIATE_COMPRESSION)
+        if INTERMEDIATE_FORMAT not in ['avro', 'parquet', 'csv']:
+            raise NotImplementedError
+        df_writer.format(INTERMEDIATE_FORMAT)
+        if INTERMEDIATE_FORMAT == 'csv':
+            df_writer.options({'header': True, 'nullValue': 'null',
+                               'timestampFormat': 'yyyy-MM-dd HH:mm:ss'})
+        if INTERMEDIATE_USE_S3:
+            url_start = 's3a://' + config['s3_bucket_name']
+        else:
+            url_start = 'hdfs://' + config['hadoop_namenode_host'] + ':' + str(config['hadoop_namenode_port'])
+        df_writer.save('/'.join([url_start, *INTERMEDIATE_DIRS]))
+
+        # the following should be unnecessary as long as code that would read the file (set) next would be derailed by
+        # an exception thrown by the above (might not be true once orchestrated by airflow?)
+        # if INTERMEDIATE_USE_S3:
+        #     # verify success of save by checking for _SUCCESS file
+        #     resp: Dict = s3_client.list_objects_v2({'Bucket': config['s3_bucket_name'], 'MaxKeys': 1,
+        #                                             'Prefix': '/'.join([*INTERMEDIATE_DIRS, '_SUCCESS'])})
+        #     if resp['Key_Count'] < 1:
+        #         raise Exception('_SUCCESS file (signalling completion of save by Spark) not found')
+
+    else:
+        # insert directly into DB using GeoMesa's API
+        df_writer = df.write.format('geomesa').options(**get_geomesa_datastore_connection_config()) \
+            .option('geomesa.feature', config['geomesa_feature'])
+        df_writer.save()
 
 
-if __name__ == '__main__':
+def parse_args() -> Namespace:
+    # FIXME: docstring
     parser = ArgumentParser(formatter_class=ArgumentDefaultsHelpFormatter)
-    parser.add_argument('metadata_table', type=unpack_table, help='metadata about the CSVs to be processed, as "linear"'
-                                                                  ' JSON, zlib-compressed and base64-encoded')
-    args = parser.parse_args()
-    metadata_table = args.metadata_table
+    parser.add_argument('metadata', type=unpack_table, help='table describing the CSVs to be processed, as "linear"'
+                                                            ' JSON, zlib-compressed and base64-encoded')
+    return parser.parse_args()
+
+
+def main():
+    args = parse_args()
+    # if args were to be consolidated with anything else (e.g. env vars, config files, etc), this would be the time
+    metadata = args.metadata
 
     config = load_config()
 
@@ -352,16 +428,18 @@ if __name__ == '__main__':
     #       df = rdd.toDF( [schema] )
     #   and finally save that DF to one big file per executor in S3 for the hand-off to Java.
 
-    # explicitly creating a SparkContext first necessary because too late for options like spark.jars and
-    # spark.jars.packages when SparkSession's getOrCreate() would be used ?
-    with SparkContext.getOrCreate(build_spark_config(config)) as spark_cont:
+    with SparkContext.getOrCreate(get_spark_config(config)) as spark_cont:
         spark = SparkSession(spark_cont)
 
         # TODO: correct the apparent floating point representation error in input data where appropriate?
 
-        process_files_concatenated(metadata_table, config)
+        process_files_concatenated(metadata, spark, config)
 
         # use pyspark DataFrame for easy loading and manipulation in terms of labeled columns
         # see https://datascience.stackexchange.com/a/13302, which includes pure RDD alternative
 
         spark.stop()
+
+
+if __name__ == '__main__':
+    main()
