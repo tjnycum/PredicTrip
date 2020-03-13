@@ -2,16 +2,14 @@
 # coding=utf-8
 #  Copyright © 2020 Terry Nycum. All rights reserved except those granted in a LICENSE file.
 
-# NOTE: many imports in this file in particular are done at the function level to minimize the potential for data
-# unnecessarily being sent to spark workers when functions in these files are mapped to them
-
-# TODO: use logging module! https://docs.python.org/3.6/howto/logging.html
+# TODO: use logging module https://docs.python.org/3.6/howto/logging.html
 
 # std lib
 from typing import Tuple, List, Dict, Any, Iterable, IO, Mapping
 from os import path, environ
 from io import BytesIO, StringIO
 from argparse import ArgumentParser, Namespace, ArgumentDefaultsHelpFormatter, ArgumentTypeError
+from functools import reduce
 
 # pyspark
 from pyspark import SparkContext, SparkConf
@@ -57,7 +55,7 @@ def get_spark_config(predictrip_config: Mapping[str, Any]) -> SparkConf:
     return sc
 
 
-def get_geomesa_datastore_connection_config(predictrip_config: Mapping[str, Any]) -> Dict[str, str]:
+def get_geomesa_datastore_options(predictrip_config: Mapping[str, Any]) -> Dict[str, str]:
     # FIXME: docstring
     return {'hbase.instance.id': predictrip_config['hbase_instance_id'],
             'hbase.catalog': predictrip_config['geomesa_catalog']}
@@ -115,7 +113,7 @@ def get_csv_stub(key: str, s3_client, config: Mapping[str, Any]) -> IO:
         raise Exception('Unexpected HTTP status code received when requesting file stub: {}. '
                         .format(resp['ResponseMetadata']['HTTPStatusCode'])
                         + '(Expected 206.) S3 object key: ' + key)
-    # TODO: confirm that resp['ContentType'] == 'text/csv' ?
+    # TODO (future): verify that resp['ContentType'] == 'text/csv', as canary of potential reporting changes
 
     file.writelines(resp['Body'])
     file.seek(0)
@@ -217,8 +215,8 @@ def process_files_concatenated(metadata: str, spark: SparkSession, config: Mappi
     # using SQL and DataFrames, trusting Catalyst's optimizations to not get bogged down by number of input DataFrames
     # FIXME: docstring
 
+    # import from pandas locally to avoid accidentally using it in code to be run on workers
     from pandas import read_json
-    from functools import reduce
 
     # read metadata into pandas data frame via in-memory file-like object
     metadata = read_json(StringIO('\n'.join(metadata)), orient='records', lines=True)
@@ -258,44 +256,20 @@ def process_files_concatenated(metadata: str, spark: SparkSession, config: Mappi
         # register GeoMesa extensions (e.g. the SQL functions we'll need) in SparkSession
         geomesa_pyspark.init_sql(spark)
 
-    # GeoMesa would use the values of a column named __fid__ as the "feature ID" (i.e. primary key of the records).
-    # GeoMesa only supports vertical partitioning ("splitting" as they call it) of tables on the basis of feature ID.
-    # When feature ID is unspecified, GM defaults to using a generator that incorporates the z3 index (in a way that
-    # preserves proximity relationships). See
-    # https://www.geomesa.org/documentation/user/datastores/runtime_config.html#geomesa-feature-id-generator
-    # An alternative would be to follow GM's general advice of using an md5 hash of the "whole record", but as GM
-    # apparently doesn't actually enforce uniqueness of the feature ID, doing so wouldn't actually help us prevent
-    # duplication anyway.
+    # When saving via geomesa_pyspark, the default feature ID construction can be overridden by including a column named
+    # "__fid__" that contains the value to be used for each feature
 
-    # TODO: once code settled, update comment below to be consistent with it
-    # add new columns containing pickup day of the week and hour and second of the day, and replace the latitude and
-    # longitude float pairs with GeoMesa points
+    # do all the calculations and schema changes desired in a single SQL SELECT statement
     # Spark builtins:
     #     ifnull(a, b)                  https://spark.apache.org/docs/2.4.4/api/sql/index.html#ifnull
-    #     hour(timestamp)               https://spark.apache.org/docs/2.4.4/api/sql/index.html#hour
-    #     weekday(timestamp)            https://spark.apache.org/docs/2.4.4/api/sql/index.html#weekday
-    #       note: weekday()   maps {Mon–Sun} -> {0–6}
-    #             dayofweek() maps {Sun–Sat} -> {1–7}
-    #         I use weekday here b/c it follows:
-    #             1. international standard (ISO 8601) re semantics of first day of week, and
-    #             2. 0-based indexing — no code currently relies on this, but as it's more common among
-    #                                   programming languages, including this one, it seems the safer choice
     #     date_trunc(fmt, timestamp)    https://spark.apache.org/docs/2.4.4/api/sql/index.html#date_trunc
+    #         note: date_trunc treats Monday as the first day of the week, following ISO 8601
     #     unix_timestamp(timestamp)     https://spark.apache.org/docs/2.4.4/api/sql/index.html#unix_timestamp
     # GeoMesa-JTS:
     #     st_point(x, y)        https://www.geomesa.org/documentation/user/spark/sparksql_functions.html#st-point
 
-    # accommodate the unintentional requirement of geomesa_pyspark's/Spark's DF.save() that the columns be in
-    # lexicographical order
-
-    # NOTE: The timezone of the timestamps in the input CSVs isn't specified, but is presumably NYC local
-    # time. We could store them as UTC as one might in a system serving the whole globe, but I'm choosing not to for
-    # a couple reasons: 1) it would complicate (or risk confusing) the querying, and 2) it would de-adjust for DST,
-    # which we probably don't want to do because DST-adjusted times are more relevant to people's travel patterns. In
-    # fact, you might store in local time even in a system serving the whole globe for that reason, at least if it
-    # weren't for trips spanning time zone and/or DST boundaries (spatial or temporal).
     if USE_INTERMEDIATE_FILE:
-        # work around geomesa_pyspark shortcomings by writing to file for DB to ingest
+        # write to file for DB to ingest
         new_column_exprs = [
             'Dropoff_Longitude',
             'Dropoff_Latitude',
@@ -307,18 +281,20 @@ def process_files_concatenated(metadata: str, spark: SparkSession, config: Mappi
             ' AS Pickup_SecondOfWeek'
         ]
     else:
+        # accommodate the unintentional requirement of geomesa_pyspark's/Spark's DF.save() that the columns be in
+        # lexicographical order
         new_column_exprs = [
-            "int(unix_timestamp(Pickup_DateTime) - unix_timestamp(date_trunc('week', Pickup_DateTime)))"
-            ' AS Pickup_SecondOfWeek',
             'st_point(Dropoff_Longitude, Dropoff_Latitude) AS Dropoff_Location',
             'ifnull(Passenger_Count, 1) AS Passenger_Count',
             'Pickup_DateTime AS Pickup_DateTime',
-            'st_point(Pickup_Longitude, Pickup_Latitude) AS Pickup_Location'
+            'st_point(Pickup_Longitude, Pickup_Latitude) AS Pickup_Location',
+            "int(unix_timestamp(Pickup_DateTime) - unix_timestamp(date_trunc('week', Pickup_DateTime)))"
+            ' AS Pickup_SecondOfWeek'
         ]
-        # NOTE: to provide for summarization, add a Trip_Count Integer attribute and cast Passenger_Count to Float (to
-        # hold the average passenger count for the summarized trips)
+        # NOTE: to provide for summarization in future, add a Trip_Count Integer attribute and cast Passenger_Count to
+        # Float (to hold the average passenger count for the summarized trips)
         #    '1 AS Trip_Count'
-        #    'ifnull(Passenger_Count, 1) AS Passenger_Count'
+        #    'float(ifnull(Passenger_Count, 1)) AS Passenger_Count'
 
     df = df.selectExpr(new_column_exprs)
 
@@ -350,7 +326,7 @@ def process_files_concatenated(metadata: str, spark: SparkSession, config: Mappi
         df_writer.save('/'.join([url_start, *INTERMEDIATE_DIRS]))
 
         # the following should be unnecessary as long as code that would read the file (set) next would be derailed by
-        # an exception thrown by the above (might not be true once orchestrated by airflow?)
+        # an exception thrown by the above (which potentially won't be the case once orchestrated by airflow)
         # if INTERMEDIATE_USE_S3:
         #     # verify success of save by checking for _SUCCESS file
         #     resp: Dict = s3_client.list_objects_v2({'Bucket': config['s3_bucket_name'], 'MaxKeys': 1,
@@ -360,7 +336,7 @@ def process_files_concatenated(metadata: str, spark: SparkSession, config: Mappi
 
     else:
         # insert directly into DB using GeoMesa's API
-        df_writer = df.write.format('geomesa').options(**get_geomesa_datastore_connection_config()) \
+        df_writer = df.write.format('geomesa').options(**get_geomesa_datastore_options(config)) \
             .option('geomesa.feature', config['geomesa_feature'])
         df_writer.save()
 
@@ -380,63 +356,12 @@ def main():
 
     config = load_config()
 
-    # Spark DataFrames cannot be created or referenced inside mapped functions. It leads to the following error:
-    # "_pickle.PicklingError: Could not serialize object: Exception: It appears that you are attempting to reference
-    # SparkContext from a broadcast variable, action, or transformation. SparkContext can only be used on the driver,
-    # not in code that it run on workers. For more information, see SPARK-5063."
-
-    # Given that, I can think of only a few ways to do the downloading of the heterogeneously structured CSVs inside a
-    # mapped function:
-    # 1. load_and_standardize_csv_contents_pandas (not yet rewritten for pandas rather than spark DFs)
-    #    Use pandas to still be able to homogenize the structure relatively easily by working with the columns by name.
-    #    Pandas will read from S3, but will no doubt download the whole file first. (Either that or we'd have to
-    #    micromanage pandas DF creation for chunks of the file at a time, if pandas allows that.) Then we might as well
-    #    do all the cleaning, structural homogenization, and re-uploading to S3 in that same mapped function while
-    #    they're already pandas DFs, right?
-    #
-    # 2. If pyspark can still read from s3 without referencing the SparkContext (which I'm skeptical of), then the lines
-    #    of the CSVs could be processed progressively as they're downloaded. If built-in Spark methods of reading from
-    #    S3 could not be used, then we'd have to use Boto3. Enabling the processing to begin before the whole files were
-    #    downloaded would likely require multi-threading and some objects to prevent overrunning of the downloaded
-    #    portions of the files. In any case, the parsing of the CSVs would probably have to be done with the csv module.
-    #    The Iterable-returning method I found before was limited to returning DictReader objects, which output tuples
-    #    of column name and value for each row. I'd need to make the handling vary depending on the metadata about the
-    #    CSV. And since it'd already be visiting each cell of the CSV, it also might as well do the structural
-    #    homogenization in the same mapped function, right? In my tentative approach to this before, I had the mapped
-    #    function dynamically choosing a sub-function to call (based on which CSV it was) that would iterate over the
-    #    CSV rows doing whatever hard-coded set of manipulations was appropriate for its batch of files. (That way we'd
-    #    avoid lots of conditional statements being evaluated redundantly for each row of a file, within which the
-    #    evaluations would always be the same anyway.) Any future joining should be built into the same single pass over
-    #    each row. The logic of that one pass seems more daunting than #3 below.
-    #
-    # 3. load_csv_contents, standardize_csv_contents
-    #    In the first (flatMapped) function, download the CSV for the file (probably having to use Boto3) and return a
-    #    list of its rows, each in a tuple with a sidecar of whatever metadata would be needed by the second (mapped)
-    #    function to parse the CSV of the line and homogenize its structure, probably using hard-coded logic in one of
-    #    several different sub-functions, as in #2. After those two functions have been mapped, construct a DF with a
-    #    newly consistent schema and re-upload to S3. In between the mapped function calls, we would want to ensure it
-    #    did not do any shuffling of the partitions. With shuffling, multiple mapped functions would mean unnecessary
-    #    transfer within the cluster. Any future joining would be done row-wise within standardize_csv_contents.
-    #
-    #   Of the above options, #3 seems like the best option. All of these would proceed as follows:
-    #       df = get_metadata_data_frame(metadata_table, parallelize=True)
-    #   then proceed to flatMap/map one or more functions to it (as RDD), e.g.
-    #       rdd = df.rdd.flatMap(load_and_standardize_csv_contents_pandas)
-    #   (Note: S3 client objects would need to be created within any mapped function downloading from S3 with Boto —
-    #   See https://boto3.amazonaws.com/v1/documentation/api/latest/guide/resources.html#multithreading-multiprocessing)
-    #   then construct a DF around the final RDD, utilizing the newly homogeneous schema
-    #       df = rdd.toDF( [schema] )
-    #   and finally save that DF to one big file per executor in S3 for the hand-off to Java.
-
     with SparkContext.getOrCreate(get_spark_config(config)) as spark_cont:
         spark = SparkSession(spark_cont)
 
         # TODO: correct the apparent floating point representation error in input data where appropriate?
 
         process_files_concatenated(metadata, spark, config)
-
-        # use pyspark DataFrame for easy loading and manipulation in terms of labeled columns
-        # see https://datascience.stackexchange.com/a/13302, which includes pure RDD alternative
 
         spark.stop()
 

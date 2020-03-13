@@ -361,10 +361,6 @@ def build_structtype_for_file(file: IO, verify_eol=False) -> StructType:
     :return: pyspark.sql.types.StructType (list-like collection of pyspark.sql.types.StructField objects) describing the
     schema of file
     """
-    # Note of possible relevance in case of major change in implementation:
-    # Name and DataType are required params of StructField constructor. If necessary, we could use instances of
-    # pyspark.sql.types.NullType as dummy values, as that's used when types can't be inferred, which is only relevant
-    # when inferring. (i.e. that would never be the "right" data type for us.)
 
     # TODO: get this working using an Iterator. i.e. without reading whole file to pass to csv.reader
     csv_rows = reader(file.read().decode().split("\r\n", 2))
@@ -372,7 +368,7 @@ def build_structtype_for_file(file: IO, verify_eol=False) -> StructType:
         column_names = csv_rows.__next__()
     except Exception:
         raise Exception('CSV file seems to be empty')
-    # ensure we got the full header by checking for detection of at least one more row
+    # ensure we got the full header by verifying detection of at least one more row
     if verify_eol:
         try:
             csv_rows.__next__()
@@ -393,8 +389,8 @@ def build_structfield_for_column(column_name: str) -> StructField:
     :return: pyspark.sql.types.StructField describing the column for PySpark
     """
     try:
-        # TODO: assuming no needs arise for differing treatment of col names differing only in case, add .lower() and
-        #  remove upper-case dictionary entries accordingly
+        # TODO: assuming no needs arise for differing treatment of col names that differ only in case, add .lower() and
+        #  update dictionary creation accordingly
         attribs = ATTRIBUTES_FOR_COL[column_name.strip()]
     except KeyError:
         raise

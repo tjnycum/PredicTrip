@@ -24,16 +24,13 @@
     <property>
         <name>geomesa.force.count</name>
         <value>false</value>
-        <description>This property controls how GeoMesa calculates the size
-            of a result set (e.g. `FeatureSource.getCount`). By default,
-            Geomesa will estimate the size of a result set using statistics.
-            This will provide a rough estimate very quickly. Some
-            applications rely on knowing the exact size of a result set up
-            front, so estimates will cause problems. To force geomesa to
-            calculate the exact size of a result set, you may set the system
-            property "geomesa.force.count" to "true". You may also override
-            this behavior on a per-query basis by using the query hint
-            `org.locationtech.geomesa.accumulo.index.QueryHints.EXACT_COUNT`.
+        <description>
+            This property controls how GeoMesa calculates the size of a result set (e.g. `FeatureSource.getCount`). By
+            default, Geomesa will estimate the size of a result set using statistics. This will provide a rough estimate
+            very quickly. Some applications rely on knowing the exact size of a result set up front, so estimates will
+            cause problems. To force geomesa to calculate the exact size of a result set, you may set the system
+            property "geomesa.force.count" to "true". You may also override this behavior on a per-query basis by using
+            the query hint `org.locationtech.geomesa.accumulo.index.QueryHints.EXACT_COUNT`.
         </description>
         <final>false</final>
     </property>
@@ -41,11 +38,10 @@
     <property>
         <name>geomesa.query.timeout</name>
         <value></value>
-        <description>This property can be used to prevent long-running
-            queries from overloading the system. When set, queries will be
-            closed after the timeout, even if not all results have been
-            returned yet. The timeout is specified as a duration, e.g. '60 seconds'
-            or '1 minute'.
+        <description>
+            This property can be used to prevent long-running queries from overloading the system. When set, queries
+            will be closed after the timeout, even if not all results have been returned yet. The timeout is specified
+            as a duration, e.g. '60 seconds' or '1 minute'.
         </description>
         <final>false</final>
     </property>
@@ -69,10 +65,9 @@
     <property>
         <name>geomesa.stats.generate</name>
         <value></value>
-        <description>This property controls whether GeoMesa will generate
-            statistics during ingestion. This property will be used if a
-            data store is not explicitly configured using the 'generateStats'
-            parameter.
+        <description>
+            This property controls whether GeoMesa will generate statistics during ingestion. This property will be used
+            if a data store is not explicitly configured using the 'generateStats' parameter.
         </description>
         <final>false</final>
     </property>
@@ -80,9 +75,10 @@
     <property>
         <name>geomesa.hbase.remote.filtering</name>
         <value>true</value>
-        <description>Enable usage of the server-side HBase Filters for GeoMesa. This requires installation
-            of the HBase Distributed Runtime jar which enables pushdown predicates of ECQL filters to be executed
-            on HBase Region Servers instead of in client code.
+        <description>
+            Enable usage of the server-side HBase Filters for GeoMesa. This requires installation of the HBase
+            Distributed Runtime jar which enables pushdown predicates of ECQL filters to be executed on HBase Region
+            Servers instead of in client code.
         </description>
         <final>false</final>
     </property>
@@ -90,8 +86,10 @@
     <property>
         <name>geomesa.hbase.coprocessor.path</name>
         <value>hdfs:///hbase/lib/</value>
-        <description>HDFS or local path to GeoMesa-HBase Coprocessor JAR. If a local path is provided it must be the same for
-            all region server. A path provided through the DataStore parameters will always override this property.
+        <description>
+            HDFS or local path to GeoMesa-HBase Coprocessor JAR. If a local path is provided it must be the
+            same for all region server. A path provided through the DataStore parameters will always override this
+            property.
         </description>
         <final>false</final>
     </property>
@@ -99,13 +97,15 @@
     <property>
         <name>geomesa.hbase.wal.durability</name>
         <value>USE_DEFAULT</value>
-        <description>HBase WAL durability setting. Available settings are:
+        <description>
+            HBase WAL durability setting. Available settings are:
             ASYNC_WAL: Write the Mutation to the WAL asynchronously
             FSYNC_WAL: Write the Mutation to the WAL synchronously and force the entries to disk.
             SKIP_WAL: Do not write the Mutation to the WAL
             SYNC_WAL: Write the Mutation to the WAL synchronously.
             USE_DEFAULT: If this is for tables durability, use HBase's global default value (SYNC_WAL).
-            For addtional information see HBase docs. https://hbase.apache.org/apidocs/org/apache/hadoop/hbase/client/Durability.htm
+            For additional information see HBase docs.
+            https://hbase.apache.org/apidocs/org/apache/hadoop/hbase/client/Durability.htm
         </description>
         <final>false</final>
     </property>
@@ -113,8 +113,10 @@
     <property>
         <name>geomesa.hbase.client.scanner.caching.size</name>
         <value></value>
-        <description>Set the number of rows for caching that will be passed to scanners. If not set, the Configuration setting HConstants.HBASE_CLIENT_SCANNER_CACHING will
-            apply. Higher caching values will enable faster scanners but will use more memory.
+        <description>
+            Set the number of rows for caching that will be passed to scanners. If not set, the Configuration setting
+            HConstants.HBASE_CLIENT_SCANNER_CACHING will apply. Higher caching values will enable faster scanners but
+            will use more memory.
         </description>
         <final>false</final>
     </property>
@@ -122,7 +124,10 @@
     <property>
         <name>geomesa.hbase.query.block.caching.enabled</name>
         <value>true</value>
-        <description>Set whether blocks should be cached for this Scan. This is true by default.  When true, default settings of the table and family are used (this will never override caching blocks if the block cache is disabled for that family or entirely).
+        <description>
+            Set whether blocks should be cached for this Scan. This is true by default. When true, default settings of
+            the table and family are used (this will never override caching blocks if the block cache is disabled for
+            that family or entirely).
         </description>
         <final>false</final>
     </property>
