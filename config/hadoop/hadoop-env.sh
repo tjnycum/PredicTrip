@@ -48,6 +48,9 @@ done
 # HADOOP_HEAPSIZE is overriden by any -Xmx options given to specific daemons
 export HADOOP_NAMENODE_OPTS="-Xmx3g -XX:+UseParallelGC ${HADOOP_NAMENODE_OPTS}"
 export HADOOP_SECONDARYNAMENODE_OPTS="${HADOOP_NAMENODE_OPTS}"
+export HADOOP_DATANODE_OPTS="-Xmx1g -XX:+UseParallelGC ${HADOOP_DATANODE_OPTS}"
+
+#export HADOOP_DATANODE_OPTS="-XX:MetaspaceSize=50m"
 
 # Extra Java runtime options.  Empty by default.
 export HADOOP_OPTS="$HADOOP_OPTS -Djava.net.preferIPv4Stack=true"
@@ -55,6 +58,7 @@ export HADOOP_OPTS="$HADOOP_OPTS -Djava.net.preferIPv4Stack=true"
 # Command specific options appended to HADOOP_OPTS when specified
 export HADOOP_NAMENODE_OPTS="-Dhadoop.security.logger=${HADOOP_SECURITY_LOGGER:-INFO,RFAS} -Dhdfs.audit.logger=${HDFS_AUDIT_LOGGER:-INFO,NullAppender} $HADOOP_NAMENODE_OPTS"
 export HADOOP_DATANODE_OPTS="-Dhadoop.security.logger=ERROR,RFAS $HADOOP_DATANODE_OPTS"
+export HADOOP_DATANODE_OPTS="-verbose:gc -XX:+PrintGCDetails -XX:+PrintGCDateStamps -Xloggc:/var/log/hadoop/gc.log -XX:+UseGCLogFileRotation -XX:NumberOfGCLogFiles=5 -XX:GCLogFileSize=50M $HADOOP_DATANODE_OPTS"
 
 export HADOOP_SECONDARYNAMENODE_OPTS="-Dhadoop.security.logger=${HADOOP_SECURITY_LOGGER:-INFO,RFAS} -Dhdfs.audit.logger=${HDFS_AUDIT_LOGGER:-INFO,NullAppender} $HADOOP_SECONDARYNAMENODE_OPTS"
 

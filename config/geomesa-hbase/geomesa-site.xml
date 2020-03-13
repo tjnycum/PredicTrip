@@ -8,9 +8,7 @@
 * http://www.opensource.org/licenses/apache2.0.php.
 *********************************************************************-->
 
-<!-- Do not modify this file directly. Instead, copy entries that you    -->
-<!-- wish to modify from this file into geomesa-site.xml and change      -->
-<!-- them there.  If geomesa-site.xml does not already exist, create it. -->
+<!-- Adapted from geomesa-site.xml.template -->
 
 <!-- If you wish a configuration item to always take precedence, even    -->
 <!-- over system properties set through command line parameters change   -->
@@ -19,23 +17,9 @@
 <!-- By default, configuration properties with empty values will not be  -->
 <!-- applied, you can change this by marking a property as final.        -->
 
-<configuration>
-    <property>
-        <name>geomesa.convert.scripts.path</name>
-        <value></value>
-        <description>A colon separated list of paths containing files to be loaded
-            onto the classpath. This is useful for getting scripts onto the classpath
-            for use by map-reduce ingest jobs.
-        </description>
-        <final>false</final>
-    </property>
+<!-- See https://www.geomesa.org/documentation/user/datastores/runtime_config.html for options -->
 
-    <property>
-        <name>geomesa.convert.config.urls</name>
-        <value></value>
-        <description></description>
-        <final>false</final>
-    </property>
+<configuration>
 
     <property>
         <name>geomesa.force.count</name>
@@ -139,6 +123,17 @@
         <name>geomesa.hbase.query.block.caching.enabled</name>
         <value>true</value>
         <description>Set whether blocks should be cached for this Scan. This is true by default.  When true, default settings of the table and family are used (this will never override caching blocks if the block cache is disabled for that family or entirely).
+        </description>
+        <final>false</final>
+    </property>
+
+    <property>
+        <name>geomesa.partition.scan.parallel</name>
+        <value>true</value>
+        <description>
+            This property controls how scans against multiple, partitioned tables are executed. By default scans will be
+            executed sequentially. If set to true, they will be executed in parallel. See
+            https://www.geomesa.org/documentation/user/datastores/runtime_config.html#geomesa-partition-scan-parallel
         </description>
         <final>false</final>
     </property>
