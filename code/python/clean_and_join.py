@@ -20,10 +20,11 @@ from pyspark.sql.types import StructType, StructField
 import geomesa_pyspark
 
 # predictrip
-from common import load_config, get_boto_session, get_s3_client, stdout_redirected_to, \
-    build_structfield_for_column, build_structtype_for_file, decompress_string, \
+from common import load_config, get_boto_session, get_s3_client, \
+    build_structfield_for_column, build_structtype_for_file, \
     ATTRIBUTES_FOR_COL, UNDESIRED_COLUMNS, \
     USE_INTERMEDIATE_FILE, INTERMEDIATE_FORMAT, INTERMEDIATE_DIRS, INTERMEDIATE_USE_S3, INTERMEDIATE_COMPRESSION
+from util import stdout_redirected_to, decompress_string
 
 TESTING = True
 TESTING_RECORD_LIMIT_PER_CSV = None
