@@ -11,6 +11,24 @@ In here go scripts that:
 
 For now, scp ~/.aws/credentials to each sparkworker. Debug their failure to get them from master later.
 
+pip install https://repo.eclipse.org/content/groups/geomesa/org/locationtech/geomesa/geomesa_pyspark/2.4.0/geomesa_pyspark-2.4.0.tar.gz
+
+installing hadoop on each relevant machine (hdfsnameN, hbaseN, sparkworkerN, geomesa):
+`wget https://archive.apache.org/dist/hadoop/common/hadoop-2.7.7/hadoop-2.7.7.tar.gz;
+tar xzf hadoop-2.7.7.tar.gz;
+sudo mv hadoop-2.7.7 /usr/local/;
+sudo ln -sT hadoop-2.7.7 /usr/local/hadoop;
+sudo mkdir /var/log/hadoop /var/local/hadoop;
+sudo chown ubuntu:ubuntu /var/log/hadoop /var/local/hadoop;`
+
+installing hbase on each relevant machine (hdfsnameN, hbaseN):
+`wget http://apache.osuosl.org/hbase/hbase-1.4.12/hbase-1.4.12-bin.tar.gz;
+tar xzf hbase-1.4.12-bin.tar.gz;
+sudo mv hbase-1.4.12 /usr/local/;
+sudo ln -sT hbase-1.4.12 /usr/local/hbase;
+sudo mkdir /var/log/hbase /var/local/hbase;
+sudo chown ubuntu:ubuntu /var/log/hbase /var/local/hbase;`
+
 on each host in VPC:
 `git clone` repo as ~/predictrip on each host
 
@@ -30,7 +48,7 @@ ln -sfT $PREDICTRIP_CONF/hadoop/masters $HADOOP_CONF/hadoop/masters;
 ln -sfT $PREDICTRIP_CONF/hadoop/yarn-site.xml $HADOOP_CONF/hadoop/yarn-site.xml;
 ln -sfT $PREDICTRIP_CONF/hadoop/yarn-env.sh $HADOOP_CONF/hadoop/yarn-env.sh`
 
-geomesa, hbaseN:
+geomesa, hbaseN, hdfsnameN:
 `PREDICTRIP_CONF=~/predictrip/config;
 HBASE_CONF=/usr/local/hbase/conf;
 ln -sfT $PREDICTRIP_CONF/hbase/hbase-site.xml $HBASE_CONF/hbase-site.xml;
