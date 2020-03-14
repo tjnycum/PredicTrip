@@ -289,7 +289,7 @@ def process_files_concatenated(metadata: str, spark: SparkSession, config: Mappi
 
     df = df.selectExpr(new_column_exprs)
 
-    debug('Schema of data frame as output to/for database: ' + df.schema)
+    debug('Schema of data frame as output to/for database: ' + str(df.schema))
 
     if TESTING and TESTING_EXPLAIN_FILE is not None:
         # Save query plan on driver for analysis
