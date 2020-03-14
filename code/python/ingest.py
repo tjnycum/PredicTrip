@@ -31,15 +31,15 @@ def parse_key(key: str) -> List[Union[str, int]]:
     """
     fn = path.basename(key)
     # specifying maxsplit in these spares it having to read tail ends of strings
-    [kind, junk, rest] = fn.split('_', 2)
+    [trip_type, junk, rest] = fn.split('_', 2)
     # rest here takes form YYYY-MM.csv
     # TODO: consider stripping .csv from tail and using date string parsing on remainder to accommodate future changes
     #  in formatting of date portion
     [year, rest] = rest.split('-', 1)
     # could just grab first two chars, but this way we don't assume leading zero on month will continue
-    [month, junk] = rest.split('.', 1)
+    month = rest.split('.', 1)[0]
     # TODO: programmatically ensure the ordering of the following stays consistent with TRIPFILE_METADATA_COLS
-    return [key, fn, kind, int(year), int(month)]
+    return [key, fn, trip_type, int(year), int(month)]
 
 
 def clean_and_standardize_time_period_data(time_period_metadata: DataFrame, config: Mapping[str, str]) -> None:
@@ -121,16 +121,18 @@ def main():
     # see https://boto3.amazonaws.com/v1/documentation/api/latest/guide/collections.html#when-collections-make-requests
     objs = list(s3_bucket.objects.filter(Prefix=config['s3_trips_prefix']).all())
 
-    # create a pandas.DataFrame to hold metadata about each of the trip data csv files
+    # use a pandas.DataFrame for convenient storage of metadata about the trip data csv files
 
     # collect metadata as (vertical) list of (horizontal) lists (rows), then construct DataFrame, for efficiency
     # (see "Notes" on
     # https://pandas.pydata.org/pandas-docs/stable/reference/api/pandas.DataFrame.append.html#pandas-dataframe-append)
     # parse filename into year, month, and trip type
-    # would be nice to declare data type of each column, but constructor only accepts a singleton dtype argument
+    # unfortunately, the DataFrame constructor only accepts a singleton dtype argument and the default inference doesn't
+    # preserve smaller numpy data types in the input. any improvement in the efficiency of the filtration and sorting
+    # below probably not worth the cost of using astype() to force the series to convert after creation given relatively
+    # small number of rows.
     trip_files = [parse_key(obj.key) for obj in objs]
     trip_files = DataFrame(trip_files, columns=[col[0] for col in TRIPFILE_METADATA_COLS])
-    # TODO: convert column data types for increased efficiency of manipulations to follow ?
 
     # exclude undesired trip files now, using labeled columns, rather than the less convenient file names
     # for now, limit to those with usable lat and long columns: green and yellow, through the first half of 2016

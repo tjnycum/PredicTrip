@@ -205,7 +205,7 @@ def process_files_concatenated(metadata: str, spark: SparkSession, config: Mappi
     # using SQL and DataFrames, trusting Catalyst's optimizations to not get bogged down by number of input DataFrames
     # FIXME: docstring
 
-    # import from pandas locally to avoid accidentally using it in code to be run on workers
+    # import from pandas locally to avoid accidental references to it from any code run on workers
     from pandas import read_json
 
     # read metadata into pandas data frame via in-memory file-like object
