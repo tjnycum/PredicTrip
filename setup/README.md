@@ -36,7 +36,8 @@ then, on the hosts indicated, link to the configuration files with the following
 
 all:
 `PREDICTRIP_CONF=~/predictrip/config;
-ln -sfT $PREDICTRIP_CONF/profile ~/.profile`
+ln -sfT $PREDICTRIP_CONF/profile ~/.profile;
+ln -sfT $PREDICTRIP_CONF/bash_profile ~/.bash_profile`
 
 geomesa, hdfsnameN, hbaseN, sparkworkerN:
 `PREDICTRIP_CONF=~/predictrip/config;
