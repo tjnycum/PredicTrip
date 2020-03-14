@@ -11,9 +11,7 @@ from subprocess import run
 from pandas import DataFrame
 
 # predictrip
-from common import load_config, get_boto_session, get_s3_client, get_s3_resource, get_s3_bucket, \
-    build_structfield_for_column, build_structtype_for_file, \
-    SPARK_DATATYPE_FOR_LATLONG, ATTRIBUTES_FOR_COL, UNDESIRED_COLUMNS, TRIPFILE_METADATA_COLS, \
+from common import load_config, get_boto_session, get_s3_resource, get_s3_bucket, TRIPFILE_METADATA_COLS, \
     USE_INTERMEDIATE_FILE, INTERMEDIATE_FORMAT, INTERMEDIATE_DIRS, INTERMEDIATE_USE_S3, INTERMEDIATE_COMPRESSION
 from util import compress_string
 

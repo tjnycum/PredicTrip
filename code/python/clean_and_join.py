@@ -20,9 +20,7 @@ from pyspark.sql.types import StructType, StructField
 import geomesa_pyspark
 
 # predictrip
-from common import load_config, get_boto_session, get_s3_client, \
-    build_structfield_for_column, build_structtype_for_file, \
-    ATTRIBUTES_FOR_COL, UNDESIRED_COLUMNS, \
+from common import load_config, get_boto_session, get_s3_client, build_structtype_for_file, DESIRED_COLUMNS, \
     USE_INTERMEDIATE_FILE, INTERMEDIATE_FORMAT, INTERMEDIATE_DIRS, INTERMEDIATE_USE_S3, INTERMEDIATE_COMPRESSION
 from util import stdout_redirected_to, decompress_string
 
@@ -178,37 +176,33 @@ def get_data_frame_for_csv(key: str, s3_client, spark: SparkSession, config: Map
     return df
 
 
-def select_new_data_frame(df: DataFrame) -> DataFrame:
+def select_new_data_frame(df: DataFrame, cols: List[str]) -> DataFrame:
     # FIXME: docstring
 
-    # drop columns we're not currently interested in
-    df = df.drop(*UNDESIRED_COLUMNS)
-
-    # Alternative approach that would be better for maintainability (in the face of potential future changes to the
-    # TLC's reporting), but might be less convenient for us. TBD when implementing the joining with TZ data
-    # DESIRED_COLUMNS = ['Pickup_DateTime', 'Pickup_Day', 'Pickup_Hour', 'Dropoff_DateTime', 'Passenger_Count',
-    #                    'Pickup_Longitude', 'Pickup_Latitude', 'Dropoff_Longitude', 'Dropoff_Latitude']
-    # df = df.selectExpr(DESIRED_COLUMNS)
-
-    # TODO: handle joining with broadcasted taxi zone DataFrame and alternative default TZ_ID cols, as necessary
+    # TODO (later): implement broadcast join with taxi zone DataFrame containing pre-calculated centroids
     # for each of Pickup and Dropoff:
     #     if [ df has a TZ col instead of a Lat-Long pair]:
-    #          do join with broadcasted TZ DF to get Lat and Long cols
+    #          do join with broadcast TZ DF to get Lat and Long cols
     #     else:
-    #          add a dummy TZ col of Nones
+    #          use withColumn to add TZ col of NULL literals
 
-    return df
+    # retain only the columns we're interested in
+    return df.selectExpr(cols)
 
 
 def uniformize_data_frames(data_frames: List[DataFrame]) -> List[DataFrame]:
     # TODO: docstring
     # Use SQL statements to extract a uniform set of columns from each of the input data frames, which can and do vary
     # in structure.
-    # By making this function take a list (rather than an individual DataFrame and calling it in a list generation),
-    # this function has an opportunity to potentially examine them all to dynamically determine what the uniform
-    # structure should be. We don't need this ability right now, though.
+    # By making this function take a list of DataFrames (rather than an individual DataFrame and calling it in a list
+    # generation), this function could potentially examine them all to dynamically determine what the uniform
+    # structure should be. We don't need this ability right now, though. Instead we can simply derive the uniform
+    # structure from DESIRED_COLUMNS.
 
-    data_frames = [select_new_data_frame(df) for df in data_frames]
+    # extract list of new_name strings from DESIRED_COLUMNS
+    cols_to_select = [new_name for ((new_name, data_type), old_names) in DESIRED_COLUMNS]
+
+    data_frames = [select_new_data_frame(df, cols_to_select) for df in data_frames]
     return data_frames
 
 
@@ -228,12 +222,13 @@ def process_files_concatenated(metadata: str, spark: SparkSession, config: Mappi
     data_frames = [get_data_frame_for_csv(key, s3_client, spark, config)
                    for key, filename in zip(metadata['Key'], metadata['Filename'])]
 
+    # TODO: consider filtering each member of data_frames individually here, so that the columns to be filtered can be
+    #  declared not nullable in the schema, which could potentially allow the future join within uniformize_data_frames
+    #  below to work more more efficiently. downside is that the spark plan output might be made even more unreadable.
+
     # standardize the structures of the data frames, then get their union
-    # TODO: find out performance penalty of using unionByName. alternative would be to use a list of the columns that we
-    #  DO want in a select statement in uniformize_data_frames to get consistent column ordering, instead of the current
-    #  dropping of what we don't want (leaving resulting ordering unknown)
     data_frames = uniformize_data_frames(data_frames)
-    df = reduce(DataFrame.unionByName, data_frames)
+    df = reduce(DataFrame.union, data_frames)
 
     # drop rows with missing or invalid values in critical columns
     # TODO: determine whether clever use of options available during data frame creation from input CSVs could be used

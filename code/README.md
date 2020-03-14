@@ -1,5 +1,9 @@
 For the code that actually drives the pipeline after its (virtual) hardware and software have been configured.
 
+Taking an inclusion list approach to specifying the columns of the input that are retained in the output should make the
+code more maintainable as it means the code only needs to be updated when reporting changes by the TLC alter the set of 
+columns that _are_ of interest, rather than the (much larger) set _not_ of interest.
+
 # Notes
 
 Notes relocated from source code, pending potential clean up and integration here:

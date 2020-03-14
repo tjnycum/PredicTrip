@@ -4,7 +4,7 @@
 # Constants and anything else that would otherwise need to be duplicated between files
 
 # std lib
-from typing import Dict, Tuple, IO, Any, Mapping
+from typing import List, Dict, Tuple, Mapping, IO, Any
 from os import path, getenv, environ
 from pathlib import Path
 from csv import reader
@@ -30,145 +30,21 @@ TRIPFILE_METADATA_COLS = [['Key', StringType],
 # 6 or 7 decimal places of Decimal Degrees equates to about 100 mm at the equator. more than enough for our application
 SPARK_DATATYPE_FOR_LATLONG = FloatType
 
-# TODO: if, in the end, no initial column names that differ in only space-padding or capitalization differ in data
-#  type, then just strip and lower-case them all before lookup and store only the remaining unique keys
-# TODO ?: to avoid unnecessary data type conversions by workers when reading CSVs, change to StringType all columns that
-#  we don't actually need to understand during cleaning/homogenization
-# TODO: limit dictionary (or whatever unified structure) to columns we want to keep/use. then when looking up, if not an
-#  initial column name isn't found in here, just leave its name unchanged and use StringType (?) for it. Then, in
-#  select_new_data_frame(), the new column names in this dictionary are the columns to be kept (if they exist).
-#  Use pandas DF? (Should be okay as long as spark workers don't need to access it.)
-# tuple structure: ( new name, subclass of pyspark.sql.types.DataType )
-# possible alternative might be in using StructType.fromJson() as exemplified here: https://stackoverflow.com/a/36035641
-ATTRIBUTES_FOR_COL: Dict[str, Tuple[str, DataType]] = {
-    'vendor_name': ('Vendor_Name', StringType),
-    'vendor_id': ('Vendor_Name', StringType),  # yes, "_id" actually contains the same sorts of strings as "_name"
-
-    'VendorID': ('Vendor_ID', ByteType),
-
-    'hvfhs_license_num': ('HVFHS_License_Num', ByteType),
-
-    'Dispatching_base_num': ('Dispatching_Base', StringType),  # 6-chars, "B" + 0-padded int
-    'dispatching_base_num': ('Dispatching_Base', StringType),
-
-    'Trip_Pickup_DateTime': ('Pickup_DateTime', TimestampType),
-    'pickup_datetime': ('Pickup_DateTime', TimestampType),
-    # ' pickup_datetime': ('Pickup_DateTime', TimestampType),
-    'lpep_pickup_datetime': ('Pickup_DateTime', TimestampType),
-    'tpep_pickup_datetime': ('Pickup_DateTime', TimestampType),
-    'Pickup_DateTime': ('Pickup_DateTime', TimestampType),
-
-    'Trip_Dropoff_DateTime': ('Dropoff_DateTime', TimestampType),
-    'dropoff_datetime': ('Dropoff_DateTime', TimestampType),
-    # ' dropoff_datetime': ('Dropoff_DateTime', TimestampType),
-    'Lpep_dropoff_datetime': ('Dropoff_DateTime', TimestampType),
-    'lpep_dropoff_datetime': ('Dropoff_DateTime', TimestampType),
-    'tpep_dropoff_datetime': ('Dropoff_DateTime', TimestampType),
-    'Dropoff_dateTime': ('Dropoff_DateTime', TimestampType),
-
-    'Passenger_Count': ('Passenger_Count', ByteType),
-    'passenger_count': ('Passenger_Count', ByteType),
-    # ' passenger_count': ('Passenger_Count', ByteType),
-    'Passenger_count': ('Passenger_Count', ByteType),
-
-    'Trip_Distance': ('Trip_Distance', FloatType),
-    'trip_distance': ('Trip_Distance', FloatType),
-    # ' trip_distance': ('Trip_Distance', FloatType),
-    'Trip_distance': ('Trip_Distance', FloatType),
-    # seems to have fixed precision of 2 decimal places, at least in some files
-
-    'Start_Lon': ('Pickup_Longitude', SPARK_DATATYPE_FOR_LATLONG),
-    'pickup_longitude': ('Pickup_Longitude', SPARK_DATATYPE_FOR_LATLONG),
-    # ' pickup_longitude': ('Pickup_Longitude', SPARK_DATATYPE_FOR_LATLONG),
-    'Pickup_longitude': ('Pickup_Longitude', SPARK_DATATYPE_FOR_LATLONG),
-
-    'Start_Lat': ('Pickup_Latitude', SPARK_DATATYPE_FOR_LATLONG),
-    'pickup_latitude': ('Pickup_Latitude', SPARK_DATATYPE_FOR_LATLONG),
-    # ' pickup_latitude': ('Pickup_Latitude', SPARK_DATATYPE_FOR_LATLONG),
-    'Pickup_latitude': ('Pickup_Latitude', SPARK_DATATYPE_FOR_LATLONG),
-
-    'PULocationID': ('Pickup_TZ_ID', ShortType),
-
-    'DOLocationID': ('Dropoff_TZ_ID', ShortType),
-
-    'Rate_Code': ('Rate_Code', ByteType),
-    'rate_code': ('Rate_Code', ByteType),
-    # ' rate_code': ('Rate_Code', ByteType),
-    'RateCodeID': ('Rate_Code', ByteType),
-    'RatecodeID': ('Rate_Code', ByteType),
-
-    'store_and_forward': ('Store_and_Forward', BooleanType),  # 0 or 1
-    'store_and_fwd_flag': ('Store_and_Forward', BooleanType),  # N or Y
-    # ' store_and_fwd_flag': ('Store_and_Forward', BooleanType),  # N or Y
-    'Store_and_fwd_flag': ('Store_and_Forward', BooleanType),  # N or Y
-
-    'SR_Flag': ('SR_Flag', BooleanType),  # I've seen 1's and blanks
-
-    'End_Lon': ('Dropoff_Longitude', SPARK_DATATYPE_FOR_LATLONG),
-    'dropoff_longitude': ('Dropoff_Longitude', SPARK_DATATYPE_FOR_LATLONG),
-    # ' dropoff_longitude': ('Dropoff_Longitude', SPARK_DATATYPE_FOR_LATLONG),
-    'Dropoff_longitude': ('Dropoff_Longitude', SPARK_DATATYPE_FOR_LATLONG),
-
-    'End_Lat': ('Dropoff_Latitude', SPARK_DATATYPE_FOR_LATLONG),
-    'dropoff_latitude': ('Dropoff_Latitude', SPARK_DATATYPE_FOR_LATLONG),
-    # ' dropoff_latitude': ('Dropoff_Latitude', SPARK_DATATYPE_FOR_LATLONG),
-    'Dropoff_latitude': ('Dropoff_Latitude', SPARK_DATATYPE_FOR_LATLONG),
-
-    'Trip_type': ('Trip_Type', ByteType),  # unknown format. haven't seen it non-blank
-    # 'Trip_type ': ('Trip_Type', ByteType),
-    'trip_type': ('Trip_Type', ByteType),  # seen integers
-
-    'Payment_Type': ('Payment_Type', StringType),
-    'payment_type': ('Payment_Type', StringType),
-    # ' payment_type': ('Payment_Type', StringType),
-    'Payment_type': ('Payment_Type', StringType),
-
-    'Fare_Amt': ('Fare_Amount', FloatType),
-    'fare_amount': ('Fare_Amount', FloatType),
-    # ' fare_amount': ('Fare_Amount', FloatType),
-    # 'fare_amount ': ('Fare_Amount', FloatType),
-    'Fare_amount': ('Fare_Amount', FloatType),
-
-    'surcharge': ('Surcharge_Amount', FloatType),
-
-    'Extra': ('Extra_Amount', FloatType),  # might be same as surcharge. can't tell
-    'extra': ('Extra_Amount', FloatType),  # might be same as surcharge. can't tell
-
-    'mta_tax': ('MTA_Tax', FloatType),
-    # ' mta_tax': ('MTA_Tax', FloatType),
-    'MTA_tax': ('MTA_Tax', FloatType),
-
-    'Tip_Amt': ('Tip_Amount', FloatType),
-    'Tip_amount': ('Tip_Amount', FloatType),
-    # ' tip_amount': ('Tip_Amount', FloatType),
-    'tip_amount': ('Tip_Amount', FloatType),
-
-    'Tolls_Amt': ('Tolls_Amount', FloatType),
-    'tolls_amt': ('Tolls_Amount', FloatType),
-    'tolls_amount': ('Tolls_Amount', FloatType),
-    # ' tolls_amt': ('Tolls_Amount', FloatType),
-    'Tolls_amount': ('Tolls_Amount', FloatType),
-
-    'Ehail_fee': ('EHail_Fee', FloatType),
-    'ehail_fee': ('EHail_Fee', FloatType),
-
-    'improvement_surcharge': ('Improvement_Surcharge', FloatType),
-
-    'congestion_surcharge': ('Congestion_Surcharge', FloatType),
-
-    'Total_Amt': ('Total_Amount', FloatType),
-    'total_amount': ('Total_Amount', FloatType),
-    # ' total_amount': ('Total_Amount', FloatType),
-    'Total_amount': ('Total_Amount', FloatType)
-}
-
-# TODO: replace ATTRIBUTES_FOR_COL and UNDESIRED_COLUMNS with a single data structure for better maintainability —
-#  see TODO item above
-# columns to drop when present in input files (referred to by their new/desired names)
-UNDESIRED_COLUMNS = ['Vendor_Name', 'Vendor_ID', 'HVFHS_License_Num', 'Dispatching_Base', 'Trip_Distance', 'Rate_Code',
-                     'Store_and_Forward', 'SR_Flag', 'Trip_Type', 'Payment_Type', 'Fare_Amount', 'Surcharge_Amount',
-                     'Extra_Amount', 'MTA_Tax', 'Tip_Amount', 'Tolls_Amount', 'EHail_Fee', 'Improvement_Surcharge',
-                     'Congestion_Surcharge', 'Total_Amount']
+# taking an inclusion list approach to filtering
+DESIRED_COLUMNS: List[Tuple[Tuple[str, DataType], List[str]]] = [
+    (('Pickup_DateTime', TimestampType),
+     ['PICKUP_DATETIME', 'TRIP_PICKUP_DATETIME', 'LPEP_PICKUP_DATETIME', 'TPEP_PICKUP_DATETIME']),
+    (('Dropoff_DateTime', TimestampType),
+     ['DROPOFF_DATETIME', 'TRIP_DROPOFF_DATETIME', 'LPEP_DROPOFF_DATETIME', 'TPEP_DROPOFF_DATETIME']),
+    (('Passenger_Count', ByteType), ['PASSENGER_COUNT']),
+    (('Pickup_Longitude', SPARK_DATATYPE_FOR_LATLONG), ['START_LON', 'PICKUP_LONGITUDE']),
+    (('Dropoff_Longitude', SPARK_DATATYPE_FOR_LATLONG), ['END_LON', 'DROPOFF_LONGITUDE']),
+    (('Pickup_Latitude', SPARK_DATATYPE_FOR_LATLONG), ['START_LAT', 'PICKUP_LATITUDE']),
+    (('Dropoff_Latitude', SPARK_DATATYPE_FOR_LATLONG), ['END_LAT', 'DROPOFF_LATITUDE'])
+]
+# to be added with implementation of join:
+# (('Pickup_TZ_ID', ShortType), ['PULocationID']),
+# (('Dropoff_TZ_ID', ShortType), ['DOLocationID'])
 
 # save to an intermediate file set for now, working around geomesa_pyspark issues
 # NOTE: as things currently stand, using geomesa_pyspark rather than intermediate files would also lead to actual 
@@ -185,8 +61,21 @@ INTERMEDIATE_DIRS = ['intermediate']
 # an unconventional suffixing of the files as if they were compressed whole)
 INTERMEDIATE_COMPRESSION = 'uncompressed'
 
-# === Functions ===
 
+# === Semi-constants ===
+# Things deterministically derived from constants but not technically constant (or dependent on things that aren't)
+
+# generate dict mapping each old_name to its (new_name, data_type) tuple (without causing redundant copies thereof)
+attributes_for_col: Dict[str, Tuple[str, DataType]] = {}
+for tup, old_names in DESIRED_COLUMNS:
+    attributes_for_col.update([(old_name, tup) for old_name in old_names])
+
+# pre-make set of keys of attributes_for_col (i.e. the old_names) so that it's not re-constructed from the dict each
+# time build_structfield_for_column is called
+desired_column_initial_names = attributes_for_col.keys()
+
+
+# === Functions ===
 
 def load_config() -> Mapping[str, Any]:
     """
@@ -318,21 +207,27 @@ def build_structtype_for_file(file: IO, verify_eol=False) -> StructType:
 
 def build_structfield_for_column(column_name: str) -> StructField:
     """
-    Build a pyspark.sql.types.StructField instance describing a trip data CSV column bearing the name given. The name in
-    the StructField will reflect any desired changes.
+    Build a pyspark.sql.types.StructField instance for a trip data CSV column bearing the name given. If it's among the
+    columns that will be retained (DESIRED_COLUMNS), the name in the StructField will reflect any desired changes. If
+    it's not, its name won't be changed and Spark will be told it's a string to avoid unnecessary parsing and type
+    conversion.
 
     :param column_name: name of column as it appears in trip data CSV header
     :return: pyspark.sql.types.StructField describing the column for PySpark
     """
-    try:
-        # TODO: assuming no needs arise for differing treatment of col names that differ only in case, add .lower() and
-        #  update dictionary creation accordingly
-        attribs = ATTRIBUTES_FOR_COL[column_name.strip()]
-    except KeyError:
-        raise
-    # note: the () after attribs[2] is needed to actually instantiate the class that is attribs[2]
-    sf = StructField(attribs[0], attribs[1]())
-    return sf
+
+    # Note: if this function starts being called from code running on Spark workers, it might be better to create the
+    # set of keys in the caller (or its caller, etc) rather than at the module level, so that it doesn't need to be
+    # serialized to the workers. Trade-off between unnecessary re-computation of unchanging result within each executor
+    # and unnecessary transfer from the driver of an object that can be easily derived from other transferred data.
+    col_name_standardized = column_name.strip().upper()
+    if col_name_standardized in desired_column_initial_names:
+        (final_name, data_type) = attributes_for_col[col_name_standardized]
+    else:
+        final_name = column_name
+        data_type = StringType
+    # note: the () after data_type is needed to actually instantiate the class
+    return StructField(final_name, data_type())
 
 
 if __name__ == '__main__':
