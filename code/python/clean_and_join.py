@@ -30,11 +30,11 @@ TESTING_RECORD_LIMIT_PER_CSV = None
 TESTING_EXPLAIN_FILE = path.join(environ['HOME'], 'spark_explanation_most_recent.txt')
 
 
-def get_spark_config(predictrip_config: Mapping[str, Any]) -> SparkConf:
+def get_spark_config(predictrip_config: Mapping[str, Mapping[str, str]]) -> SparkConf:
     """
     Create an object representing the Spark configuration we want
 
-    :type predictrip_config: mapping in which we internally store configuration data loaded from preference files
+    :type predictrip_config: mapping returned by load_config containing configuration options
     :return: pyspark.SparkConf instance
     """
     # NOTE: contrary to https://www.geomesa.org/documentation/user/spark/pyspark.html#using-geomesa-pyspark, use of
@@ -44,20 +44,20 @@ def get_spark_config(predictrip_config: Mapping[str, Any]) -> SparkConf:
     sc = SparkConf()
     sc = sc.setAppName('PredicTrip ' + path.basename(__file__))
     # FIXME: the following doesn't seem to be effective
-    sc = sc.setAll([('fs.s3a.awsAccessKeyId', predictrip_config['aws_access_key_id']),
-                    ('fs.s3a.awsSecretAccessKey', predictrip_config['aws_secret_access_key'])])
-    # TODO: get any other spark options from predictrip_config and add them to sc here — needed if we were to stop
-    #  specifying them in spark-defaults.conf (or having them preinstalled on workers with pip)
-    # such options would include: spark.jars, spark.jars.packages, spark.files
-    if 'spark.executor.cores' in predictrip_config:
-        sc = sc.set('spark.executor.cores', predictrip_config['spark.executor.cores'])
+    sc = sc.setAll([('fs.s3a.awsAccessKeyId', predictrip_config['AWS']['access_key_id']),
+                    ('fs.s3a.awsSecretAccessKey', predictrip_config['AWS']['secret_access_key'])])
+    # add to sc any spark options that might be set in predictrip_config
+    if 'executor_cores' in predictrip_config['Spark']:
+        sc = sc.set('spark.executor.cores', predictrip_config['Spark']['executor_cores'])
+    if 'executor_memory' in predictrip_config['Spark']:
+        sc = sc.set('spark.executor.memory', predictrip_config['Spark']['executor_memory'])
     return sc
 
 
-def get_geomesa_datastore_options(predictrip_config: Mapping[str, Any]) -> Dict[str, str]:
+def get_geomesa_datastore_options(predictrip_config: Mapping[str, Mapping[str, str]]) -> Dict[str, str]:
     # FIXME: docstring
-    return {'hbase.instance.id': predictrip_config['hbase_instance_id'],
-            'hbase.catalog': predictrip_config['geomesa_catalog']}
+    return {'hbase.instance.id': predictrip_config['HBase']['instance_id'],
+            'hbase.catalog': predictrip_config['GeoMesa']['catalog']}
 
 
 def unpack_table(string: str) -> List[str]:
@@ -84,9 +84,9 @@ def unpack_table(string: str) -> List[str]:
     return string_list
 
 
-def get_csv_stub(key: str, s3_client, config: Mapping[str, Any]) -> IO:
+def get_csv_stub(key: str, s3_client, config: Mapping[str, Mapping[str, str]]) -> IO:
     """
-    Get a file-like object containing the first config['csv_stub_bytes'] bytes of an S3 object.
+    Get a file-like object containing the first config['PredicTrip'].getint('csv_stub_bytes') bytes of an S3 object.
 
     :param key: S3 key of the file object
     :param s3_client: Boto3 S3 Client instance with which to download stub
@@ -99,8 +99,8 @@ def get_csv_stub(key: str, s3_client, config: Mapping[str, Any]) -> IO:
     # byte range is inclusive and numbered from 0.
     # (see https://boto3.amazonaws.com/v1/documentation/api/latest/reference/services/s3.html#S3.Client.get_object
     # and https://www.w3.org/Protocols/rfc2616/rfc2616-sec14.html#sec14.35)
-    resp = s3_client.get_object(Bucket=config['s3_bucket_name'], Key=key,
-                                Range='bytes={}-{}'.format(0, config['csv_stub_bytes'] - 1))
+    resp = s3_client.get_object(Bucket=config['AWS']['s3_bucket_name'], Key=key,
+                                Range='bytes={}-{}'.format(0, config['PredicTrip'].getint('csv_stub_bytes') - 1))
 
     # HTTP status code 206 represents successful request for partial content
     if resp['ResponseMetadata']['HTTPStatusCode'] != 206:
@@ -114,7 +114,7 @@ def get_csv_stub(key: str, s3_client, config: Mapping[str, Any]) -> IO:
     return file
 
 
-def get_struct_type_for_s3_key(key: str, s3_client, config: Mapping[str, Any]) -> StructType:
+def get_struct_type_for_s3_key(key: str, s3_client, config: Mapping[str, Mapping[str, str]]) -> StructType:
     """
     Build a PySpark StructType describing the file having a given S3 object key
 
@@ -155,11 +155,12 @@ def get_metadata_data_frame(metadata_table: str, spark: SparkSession, spark_cont
     return spark.read.json(spark_cont.parallelize(metadata_table))
 
 
-def get_data_frame_for_csv(key: str, s3_client, spark: SparkSession, config: Mapping[str, Any]) -> DataFrame:
+def get_data_frame_for_csv(key: str, s3_client, spark: SparkSession,
+                           config: Mapping[str, Mapping[str, str]]) -> DataFrame:
     # FIXME: docstring
 
     # create DataFrame, specifying schema instead of inferring, for performance reasons
-    source_filename = 's3a://' + config['s3_bucket_name'] + '/' + key
+    source_filename = 's3a://' + config['AWS']['s3_bucket_name'] + '/' + key
     schema = get_struct_type_for_s3_key(key, s3_client, config)
     # TODO: use a parser to determine timestampFormat from appropriate column of downloaded stub, to
     #  accommodate future formatting changes
@@ -201,7 +202,7 @@ def uniformize_data_frames(data_frames: List[DataFrame]) -> List[DataFrame]:
     return data_frames
 
 
-def process_files_concatenated(metadata: str, spark: SparkSession, config: Mapping[str, Any]) -> None:
+def process_files_concatenated(metadata: str, spark: SparkSession, config: Mapping[str, Mapping[str, str]]) -> None:
     # using SQL and DataFrames, trusting Catalyst's optimizations to not get bogged down by number of input DataFrames
     # FIXME: docstring
 
@@ -309,16 +310,16 @@ def process_files_concatenated(metadata: str, spark: SparkSession, config: Mappi
             df_writer.options({'header': True, 'nullValue': 'null',
                                'timestampFormat': 'yyyy-MM-dd HH:mm:ss'})
         if INTERMEDIATE_USE_S3:
-            url_start = 's3a://' + config['s3_bucket_name']
+            url_start = 's3a://' + config['AWS']['s3_bucket_name']
         else:
-            url_start = 'hdfs://' + config['hadoop_namenode_host'] + ':' + str(config['hadoop_namenode_port'])
+            url_start = 'hdfs://' + config['Hadoop']['name_node_host'] + ':' + config['Hadoop']['name_node_port']
         df_writer.save('/'.join([url_start, *INTERMEDIATE_DIRS]))
 
         # the following should be unnecessary as long as code that would read the file (set) next would be derailed by
         # an exception thrown by the above (which potentially won't be the case once orchestrated by airflow)
         # if INTERMEDIATE_USE_S3:
         #     # verify success of save by checking for _SUCCESS file
-        #     resp: Dict = s3_client.list_objects_v2({'Bucket': config['s3_bucket_name'], 'MaxKeys': 1,
+        #     resp: Dict = s3_client.list_objects_v2({'Bucket': config['AWS']['s3_bucket_name'], 'MaxKeys': 1,
         #                                             'Prefix': '/'.join([*INTERMEDIATE_DIRS, '_SUCCESS'])})
         #     if resp['Key_Count'] < 1:
         #         raise Exception('_SUCCESS file (signalling completion of save by Spark) not found')
@@ -326,7 +327,7 @@ def process_files_concatenated(metadata: str, spark: SparkSession, config: Mappi
     else:
         # insert directly into DB using GeoMesa's API
         df_writer = df.write.format('geomesa').options(**get_geomesa_datastore_options(config)) \
-            .option('geomesa.feature', config['geomesa_feature'])
+            .option('geomesa.feature', config['GeoMesa']['feature'])
         df_writer.save()
 
 

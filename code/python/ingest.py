@@ -3,7 +3,7 @@
 #  Copyright © 2020 Terry Nycum. All rights reserved except those granted in a LICENSE file.
 
 # std lib
-from os import path
+from os import path, environ
 from typing import List, Mapping, Union, Tuple, Any
 from subprocess import run
 from logging import debug
@@ -42,7 +42,8 @@ def parse_key(key: str) -> List[Union[str, int]]:
     return [key, fn, trip_type, int(year), int(month)]
 
 
-def clean_and_standardize_time_period_data(time_period_metadata: DataFrame, config: Mapping[str, str]) -> None:
+def clean_and_standardize_time_period_data(time_period_metadata: DataFrame,
+                                           config: Mapping[str, Mapping[str, str]]) -> None:
     # FIXME: add docstring
 
     # NOTE: for compatibility with pyspark method used on the other end, it MUST be that orient='records' and lines=True
@@ -51,35 +52,35 @@ def clean_and_standardize_time_period_data(time_period_metadata: DataFrame, conf
     table_compressed = compress_string(table_json)
 
     # construct call to spark-submit
-    spark_submit = path.join(config['spark_home'], 'bin', 'spark-submit')
+    spark_submit = path.join(environ['SPARK_HOME'], 'bin', 'spark-submit')
     # don't need to specify to spark-submit anything set in spark-defaults.conf or SparkConf
-    script = path.join(config['repo_root'], 'code', 'python', 'clean_and_join.py')
+    script = path.join(config['PredicTrip']['repo_root'], 'code', 'python', 'clean_and_join.py')
     cmd = [spark_submit, script, table_compressed]
     # using user's home dir as cwd achieves the behavior of any relative repo_root being assumed to be relative to it
     debug('Calling run with cwd=~ and args: ' + str(cmd))
     run(cmd, check=True, cwd=path.expanduser('~'))
 
 
-def cast_and_insert_time_period_data(config: Mapping[str, str]) -> None:
+def cast_and_insert_time_period_data(config: Mapping[str, Mapping[str, str]]) -> None:
     # FIXME: add docstring
     # only needed if not using geomesa_pyspark to insert to DB directly from spark
 
     # construct call to geomesa-hbase to ingest features from intermediate file
-    geomesa = path.join(config['geomesa_home'], 'bin', 'geomesa-hbase')
+    geomesa = path.join(environ['GEOMESA_HBASE_HOME'], 'bin', 'geomesa-hbase')
     if INTERMEDIATE_COMPRESSION != 'uncompressed':
         raise NotImplementedError
     if INTERMEDIATE_USE_S3:
-        url_start = 's3a://' + config['s3_bucket_name']
+        url_start = 's3a://' + config['AWS']['s3_bucket_name']
     else:
-        url_start = 'hdfs://' + config['hadoop_namenode_host'] + ':' + str(config['hadoop_namenode_port'])
-    cmd = [geomesa, 'ingest', '-c', config['geomesa_catalog'], '-C', config['geomesa_converter'],
-           '-f', config['geomesa_feature'], '--run-mode', 'distributed',
+        url_start = 'hdfs://' + config['Hadoop']['name_node_host'] + ':' + config['Hadoop']['name_node_port']
+    cmd = [geomesa, 'ingest', '-c', config['GeoMesa']['catalog'], '-C', config['GeoMesa']['converter'],
+           '-f', config['GeoMesa']['feature'], '--run-mode', 'distributed',
            '/'.join([url_start, *INTERMEDIATE_DIRS, '*.' + INTERMEDIATE_FORMAT])]
     debug('Calling run with args: ' + str(cmd))
     run(cmd, check=True)
 
 
-def simulate_time_period(time_period_table: DataFrame, config: Mapping[str, Any]) -> None:
+def simulate_time_period(time_period_table: DataFrame, config: Mapping[str, Mapping[str, str]]) -> None:
     # FIXME: docstring
     # do ETL, any compaction cycle, pause for demo querying
 
@@ -120,7 +121,7 @@ def main():
     # get list of files in relevant dir of bucket
     # by converting to list we should trigger just one call to S3 API, unlike iterating over collection
     # see https://boto3.amazonaws.com/v1/documentation/api/latest/guide/collections.html#when-collections-make-requests
-    objs = list(s3_bucket.objects.filter(Prefix=config['s3_trips_prefix']).all())
+    objs = list(s3_bucket.objects.filter(Prefix=config['AWS']['s3_trips_prefix']).all())
 
     # use a pandas.DataFrame for convenient storage of metadata about the trip data csv files
 

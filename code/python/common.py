@@ -4,10 +4,11 @@
 # Constants and anything else that would otherwise need to be duplicated between files
 
 # std lib
-from typing import List, Dict, Tuple, Mapping, IO, Any
+from typing import List, Dict, Tuple, Mapping, IO, Any, Union
 from os import path, getenv, environ
 from pathlib import Path
 from csv import reader
+from configparser import ConfigParser
 
 # boto3
 from boto3.session import Session
@@ -77,68 +78,40 @@ desired_column_initial_names = attributes_for_col.keys()
 
 # === Functions ===
 
-def load_config() -> Mapping[str, Any]:
+def load_config() -> Mapping[str, Mapping[str, str]]:
     """
-    Load relevant configuration items from various files
-    :return: predictrip options
+    Load configuration information from predictrip-defaults.ini and any predictrip-site.ini
+
+    :return: a ConfigParser
     """
-    # TODO: return a ChainMap (https://docs.python.org/3.6/library/collections.html#chainmap-objects) that synthesizes
-    #  settings loaded from predictrip-site.*, predictrip-defaults.*, the config files of other packages, and any future
-    #  command line args
-    from configparser import ConfigParser
     repo_root = Path(__file__).parent.parent.parent
-    parser = ConfigParser()
-    parser.read(path.join(repo_root, 'config', 'predictrip', 'predictrip-site.ini'))
-    config = {}
 
-    config['repo_root'] = repo_root
+    predictrip_config_dir = path.join(repo_root, 'config', 'predictrip')
 
-    # TODO: address possibility of sections not existing
+    config = ConfigParser(dict_type=dict, empty_lines_in_values=False)
+    config.read_file(open(path.join(predictrip_config_dir, 'predictrip-defaults.ini')))
+    config.read(path.join(predictrip_config_dir, 'predictrip-site.ini'))
 
-    # TODO: check for AWS credential sources in order checked by aws jars and boto
+    # TODO: if not specified in predictrip-site.ini, check AWS credential sources in order checked by aws jars and boto
     #  (see https://boto3.amazonaws.com/v1/documentation/api/latest/guide/configuration.html#configuring-credentials),
     #  then add whatever options to spark_conf-generation needed to distribute the first one present to workers. pass
     #  credentials as params to boto's client method
 
-    # TODO: get defaults from predictrip-defaults.ini rather than hard-coding here
-
-    config['aws_access_key_id'] = parser['AWS'].get('AccessKeyId')
-    config['aws_secret_access_key'] = parser['AWS'].get('SecretAccessKey')
-
-    config['s3_bucket_name'] = parser['S3'].get('BucketName', 'nyc-tlc')
-    config['s3_trips_prefix'] = parser['S3'].get('TripFilePrefix', 'trip data')
-    config['csv_stub_bytes'] = int(parser['S3'].get('CsvHeaderStubSize'))
-
-    # TODO: get from config/hadoop/core-site.xml if not present in predictrip config
-    config['hadoop_namenode_host'] = parser['Hadoop'].get('NameNodeHost')
-    # TODO: find proper way to read as int from file. I think there's an alternative get method
-    config['hadoop_namenode_port'] = int(parser['Hadoop'].get('NameNodePort', 9000))
-
-    config['hbase_instance_id'] = parser['HBase'].get('InstanceID', 'default')
-
-    config['spark_geomesa_jar'] = parser['Spark'].get('GeoMesaJar')
-    # TODO: get from config/spark/spark-env.sh if not present in predictrip config
-    # TODO: find proper way to read as int from file. I think there's an alternative get method
-    config['spark_master_port'] = int(parser['Spark'].get('MasterPort', 7077))
-    config['spark_home'] = parser['Spark'].get('Home', getenv('SPARK_HOME', '/usr/local/spark'))
-
-    config['geomesa_home'] = parser['GeoMesa'].get('Home', getenv('GEOMESA_HBASE_HOME', '/usr/local/geomesa-hbase'))
-    config['geomesa_catalog'] = parser['GeoMesa'].get('Catalog', 'predictrip')
-    config['geomesa_feature'] = parser['GeoMesa'].get('Feature', 'trip')
-    config['geomesa_converter'] = parser['GeoMesa'].get('Converter', 'intermediate_avro')
+    # TODO: to avoid configuration duplication, get from other packages' config files and remove from predictrip files:
+    #  config/hadoop/core-site.xml: name_node_host and name_node_port
 
     return config
 
 
-def get_boto_session(config: Mapping[str, Any]) -> Session:
+def get_boto_session(config: Mapping[str, Mapping[str, str]]) -> Session:
     """
     Build a boto3 session configured for predictrip
 
     :type config: Mapping of predictrip configuration items
     :return: boto session instance
     """
-    return Session(aws_access_key_id=config['aws_access_key_id'],
-                   aws_secret_access_key=config['aws_secret_access_key'])
+    return Session(aws_access_key_id=config['AWS']['access_key_id'],
+                   aws_secret_access_key=config['AWS']['secret_access_key'])
 
 
 def get_s3_client(session: Session):
@@ -164,7 +137,7 @@ def get_s3_resource(session: Session):
     return session.resource('s3')
 
 
-def get_s3_bucket(s3_resource, config: Mapping[str, Any]):
+def get_s3_bucket(s3_resource, config: Mapping[str, Mapping[str, str]]):
     """
     Get a boto3 S3 Bucket instance providing access to the bucket we're interested in
     :type s3_resource: boto S3 resource object
@@ -173,7 +146,7 @@ def get_s3_bucket(s3_resource, config: Mapping[str, Any]):
     """
     # TODO: figure out best type hints for return and s3_resource input
     # TODO: try, raise own error if unable to read bucket? (more helpful message?)
-    return s3_resource.Bucket(config['s3_bucket_name'])
+    return s3_resource.Bucket(config['AWS']['s3_bucket_name'])
 
 
 def build_structtype_for_file(file: IO, verify_eol=False) -> StructType:
