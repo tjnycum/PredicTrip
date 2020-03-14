@@ -55,10 +55,8 @@ def clean_and_standardize_time_period_data(time_period_metadata: DataFrame, conf
     # don't need to specify to spark-submit anything set in spark-defaults.conf or SparkConf
     script = path.join(config['repo_root'], 'code', 'python', 'clean_and_join.py')
     cmd = [spark_submit, script, table_compressed]
-    # Note: including config['repo_root'] part of path in script is redundant of using cwd arg, but *shrug* this way
-    # a little more resilient to future code changes
     debug('Calling run with args: ' + str(cmd))
-    run(cmd, check=True, cwd=config['repo_root'])
+    run(cmd, check=True)
 
 
 def cast_and_insert_time_period_data(config: Mapping[str, str]) -> None:
