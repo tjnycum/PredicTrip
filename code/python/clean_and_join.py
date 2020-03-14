@@ -2,8 +2,6 @@
 # coding=utf-8
 #  Copyright © 2020 Terry Nycum. All rights reserved except those granted in a LICENSE file.
 
-# TODO: use logging module https://docs.python.org/3.6/howto/logging.html
-
 # std lib
 from typing import Tuple, List, Dict, Any, Iterable, IO, Mapping
 from os import path, environ
@@ -11,6 +9,7 @@ from io import BytesIO, StringIO
 from argparse import ArgumentParser, Namespace, ArgumentDefaultsHelpFormatter, ArgumentTypeError
 from functools import reduce
 from contextlib import redirect_stdout
+from logging import info, debug
 
 # pyspark
 from pyspark import SparkContext, SparkConf
@@ -61,12 +60,11 @@ def get_geomesa_datastore_options(predictrip_config: Mapping[str, Any]) -> Dict[
             'hbase.catalog': predictrip_config['geomesa_catalog']}
 
 
-def unpack_table(string: str, debugging=False) -> List[str]:
+def unpack_table(string: str) -> List[str]:
     """
     Unpack string received for metadata_table parameter into list of the JSON strings that represent individual records
 
     :type string: putative "linear JSON" encoding of metadata table, compressed by common.compress_string
-    :param debugging: whether to include some output potentially helpful in debugging
     :return: list of individually JSON-encoded record strings
     """
     if type(string) is not str:
@@ -75,15 +73,11 @@ def unpack_table(string: str, debugging=False) -> List[str]:
         string = decompress_string(string)
     except Exception:
         raise Exception('error decoding compressed string')
-    if debugging:
-        print('before splitlines:')
-        print(string)
+    debug('Before splitlines: ' + string)
     # if string contains just a single line, splitlines will return a list containing one string, which is exactly what
     # we need to pass pyspark in that case
     string_list = string.splitlines()
-    if debugging:
-        print('after splitlines:')
-        print(string_list)
+    debug('After splitlines: ' + string)
     # at this point we could try to validate each line as being valid JSON by attempting to read it using the json
     # package, but pyspark should report any problems with the JSON it receives anyway, and we wouldn't want to reject
     # any JSON the json package didn't like if psypark might have wider compatibility
@@ -295,8 +289,7 @@ def process_files_concatenated(metadata: str, spark: SparkSession, config: Mappi
 
     df = df.selectExpr(new_column_exprs)
 
-    # TODO: log (DEBUG) this instead
-    print(df.schema)
+    debug('Schema of data frame as output to/for database: ' + df.schema)
 
     if TESTING and TESTING_EXPLAIN_FILE is not None:
         # Save query plan on driver for analysis
@@ -304,7 +297,7 @@ def process_files_concatenated(metadata: str, spark: SparkSession, config: Mappi
             # have to redirect stdout, as df.explain does not return the string. it prints it to stdout and returns None
             with redirect_stdout(file):
                 df.explain(extended=True)
-            print('Spark query explanation saved to ' + TESTING_EXPLAIN_FILE)
+            info('Spark extended query explanation saved to ' + TESTING_EXPLAIN_FILE)
 
     if USE_INTERMEDIATE_FILE:
         # save to an intermediate file set to be ingested by geomesa_hbase, bypassing geomesa_pyspark issues

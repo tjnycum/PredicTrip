@@ -6,6 +6,7 @@
 from os import path
 from typing import List, Mapping, Union, Tuple, Any
 from subprocess import run
+from logging import debug
 
 # pandas
 from pandas import DataFrame
@@ -56,7 +57,7 @@ def clean_and_standardize_time_period_data(time_period_metadata: DataFrame, conf
     cmd = [spark_submit, script, table_compressed]
     # Note: including config['repo_root'] part of path in script is redundant of using cwd arg, but *shrug* this way
     # a little more resilient to future code changes
-    # TODO: log (DEBUG) the command about to be run
+    debug('Calling run with args: ' + str(cmd))
     run(cmd, check=True, cwd=config['repo_root'])
 
 
@@ -75,7 +76,7 @@ def cast_and_insert_time_period_data(config: Mapping[str, str]) -> None:
     cmd = [geomesa, 'ingest', '-c', config['geomesa_catalog'], '-C', config['geomesa_converter'],
            '-f', config['geomesa_feature'], '--run-mode', 'distributed',
            '/'.join([url_start, *INTERMEDIATE_DIRS, '*.' + INTERMEDIATE_FORMAT])]
-    # TODO: log (DEBUG) the command about to be run
+    debug('Calling run with args: ' + str(cmd))
     run(cmd, check=True)
 
 

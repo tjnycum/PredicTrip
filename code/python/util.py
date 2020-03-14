@@ -1,30 +1,25 @@
 #  Copyright © 2020 Terry Nycum. All rights reserved except those granted in a LICENSE file.
 
+from logging import debug
 
-def compress_string(string: str, debugging=False) -> str:
+
+def compress_string(string: str) -> str:
     """
     Compress a UTF-8 string in a way safe for passage as an argument through fork/exec, but not necessarily shells
 
     :param string: string to be compressed
-    :param debugging: whether to print output potentially helpful in debugging
     :return: string of base64-encoded bytes
     """
     from zlib import compress
     from base64 import b64encode
 
     string_bytes = string.encode('utf-8')
-    if debugging:
-        print('initial string is {} bytes in size'.format(len(string_bytes)))
+    debug('initial string is {} bytes in size'.format(len(string_bytes)))
     string_compressed = compress(string_bytes)
-    if debugging:
-        print('string is {} bytes in size after compression with zlib (default level, 6)'
-              .format(len(string_compressed)))
-        for n in range(1, 10):
-            print('string is {} bytes in size after compression with zlib (level {})'
-                  .format(n, len(compress(string_bytes, level=n))))
+    debug('string is {} bytes in size after compression with zlib (default level, 6)'
+          .format(len(string_compressed)))
     string_b64 = b64encode(string_compressed)
-    if debugging:
-        print('string is {} bytes in size after base64-encoding'.format(len(string_b64)))
+    debug('string is {} bytes in size after base64-encoding'.format(len(string_b64)))
     return string_b64.decode('utf-8')
 
 
