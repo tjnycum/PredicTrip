@@ -1,8 +1,5 @@
 #  Copyright © 2020 Terry Nycum. All rights reserved except those granted in a LICENSE file.
 
-from typing import IO
-from contextlib import contextmanager
-
 
 def compress_string(string: str, debugging=False) -> str:
     """
@@ -47,27 +44,3 @@ def decompress_string(string: str) -> str:
     string_bytes = decompress(b64_bytes)
     string_decompressed = string_bytes.decode('utf-8')
     return string_decompressed
-
-
-@contextmanager
-def stdout_redirected_to(out_stream: IO):
-    """
-    Return a context in which stdout is redirected to a given File-like object
-    Usage example:
-        with stdout_redirected_to(open('foo.txt')):
-            do_stuff_you_want_to_redirect()
-        do_things_normally_again()
-    Very slight modification of code suggested in https://stackoverflow.com/a/54058723
-
-    :param out_stream: File-like object to which to redirect stdout
-    """
-    # TODO: pin down the full scope of what out_stream could be and update type hint and docstring accordingly
-
-    from sys import stdout
-
-    orig_stdout = stdout
-    try:
-        stdout = out_stream
-        yield
-    finally:
-        stdout = orig_stdout

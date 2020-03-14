@@ -10,6 +10,7 @@ from os import path, environ
 from io import BytesIO, StringIO
 from argparse import ArgumentParser, Namespace, ArgumentDefaultsHelpFormatter, ArgumentTypeError
 from functools import reduce
+from contextlib import redirect_stdout
 
 # pyspark
 from pyspark import SparkContext, SparkConf
@@ -22,7 +23,7 @@ import geomesa_pyspark
 # predictrip
 from common import load_config, get_boto_session, get_s3_client, build_structtype_for_file, DESIRED_COLUMNS, \
     USE_INTERMEDIATE_FILE, INTERMEDIATE_FORMAT, INTERMEDIATE_DIRS, INTERMEDIATE_USE_S3, INTERMEDIATE_COMPRESSION
-from util import stdout_redirected_to, decompress_string
+from util import decompress_string
 
 TESTING = True
 TESTING_RECORD_LIMIT_PER_CSV = None
@@ -301,8 +302,7 @@ def process_files_concatenated(metadata: str, spark: SparkSession, config: Mappi
         # Save query plan on driver for analysis
         with open(TESTING_EXPLAIN_FILE, mode='wt') as file:
             # have to redirect stdout, as df.explain does not return the string. it prints it to stdout and returns None
-            with stdout_redirected_to(file):
-                # FIXME: this isn't preventing output to console. instead sending to both
+            with redirect_stdout(file):
                 df.explain(extended=True)
             print('Spark query explanation saved to ' + TESTING_EXPLAIN_FILE)
 
