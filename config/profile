@@ -59,6 +59,8 @@ fi
 if [ -d /usr/local/geoserver ]; then
     GEOSERVER_HOME=/usr/local/geoserver
     export GEOSERVER_HOME
+    GEOSERVER_DATA_DIR=/var/local/geoserver
+    export GEOSERVER_DATA_DIR
     PATH="$GEOSERVER_HOME"/bin:"$PATH"
 fi
 
