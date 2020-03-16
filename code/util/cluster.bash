@@ -30,8 +30,8 @@ function start-cluster () {
     ssh -t "$SPARK_MASTER" '/usr/local/spark/sbin/start-all.sh' || exit
   fi
 
-  echo "starting HBase"
-  ssh -t "$HDFSNAME1" '/usr/local/hbase/bin/start-hbase.sh'
+  echo "Starting HBase"
+  ssh -t "$HBASE_MASTER" '/usr/local/hbase/bin/start-hbase.sh'
 
 }
 
