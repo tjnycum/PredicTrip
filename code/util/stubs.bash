@@ -1,7 +1,11 @@
 #!/usr/bin/env bash
 # Copyright © 2020 Terry Nycum. All rights reserved except those granted in a LICENSE file.
 
-# NOTE: these functions assume you want to use all (and only) "*.csv"-named files in the current directory
+function download_stubs () {
+  curl --range 0-262144 --remote-name 'https://s3.amazonaws.com/nyc-tlc/trip+data/{yellow,green,fhv,fhvhv}_tripdata_20[09-19]-[01-12].csv'
+}
+
+# NOTE: the functions below assume you want to use all (and only) "*.csv"-named files in the current directory
 
 function bytes_in_first_line () { head -n 1 "$1" | wc -c; }
 
