@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 
-# explicitly run any .profile that exists, because bash itself won't when this file exists
+# explicitly source any .profile that exists, because bash itself won't when this file exists
 if [ -f "${HOME}"/.profile ]; then
-    . "${HOME}"/.profile
+    source "${HOME}"/.profile
 fi
 
-# source utility scripts
+# source PredicTrip utility scripts
 UTIL_DIR="${PREDICTRIP_HOME}"/code/util/
 
 source "${UTIL_DIR}"/logs.bash
+source "${UTIL_DIR}"/cluster.bash
