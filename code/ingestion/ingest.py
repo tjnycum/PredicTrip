@@ -54,7 +54,7 @@ def clean_and_standardize_time_period_data(time_period_metadata: DataFrame,
     # construct call to spark-submit
     spark_submit = path.join(environ['SPARK_HOME'], 'bin', 'spark-submit')
     # don't need to specify to spark-submit anything set in spark-defaults.conf or SparkConf
-    script = path.join(config['PredicTrip']['repo_root'], 'code', 'python', 'clean_and_join.py')
+    script = path.join(config['PredicTrip']['repo_root'], 'code', 'ingestion', 'clean_and_join.py')
     cmd = [spark_submit, script, table_compressed]
     # using user's home dir as cwd achieves the behavior of any relative repo_root being assumed to be relative to it
     debug('Calling run with cwd=~ and args: ' + str(cmd))
